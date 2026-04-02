@@ -1,0 +1,28 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Compile Java",
+            "type": "shell",
+            "command": "& 'C:\\Program Files\\Apache NetBeans\\jdk\\bin\\javac.exe' --release 17 -cp 'dist\\lib\\core-4.5.2.jar;dist\\lib\\jogl-all-2.6.0.jar;dist\\lib\\gluegen-rt-2.6.0.jar' -d build\\classes src\\game\\of\\life\\on\\gpu\\*.java",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Build JAR",
+            "type": "shell",
+            "command": "$mf=\"Manifest-Version: 1.0`r`nClass-Path: lib/core-4.5.2.jar lib/gluegen-rt-2.6.0.jar lib/gluegen-rt-2.6.0-natives-windows-amd64.jar lib/gluegen-rt-main-2.6.0.jar lib/jogl-all-2.6.0.jar lib/jogl-all-2.6.0-natives-windows-amd64.jar lib/jogl-all-main-2.6.0.jar`r`nMain-Class: Main`r`n`r`n\"; Set-Content dist\\MANIFEST.MF -Value $mf -NoNewline -Encoding ASCII; & 'C:\\Program Files\\Apache NetBeans\\jdk\\bin\\jar.exe' cfm dist\\Game_Of_Life_On_GPU.jar dist\\MANIFEST.MF -C build\\classes .; Remove-Item dist\\MANIFEST.MF; Write-Host 'JAR built.'",
+            "group": "build",
+            "dependsOn": "Compile Java",
+            "problemMatcher": []
+        },
+        {
+            "label": "Run Game",
+            "type": "shell",
+            "command": "$env:PATH='C:\\Program Files\\Apache NetBeans\\jdk\\bin;'+$env:PATH; & 'C:\\Program Files\\Apache NetBeans\\jdk\\bin\\java.exe' '--enable-native-access=ALL-UNNAMED' '--add-exports=java.desktop/sun.awt=ALL-UNNAMED' '--add-exports=java.desktop/sun.java2d=ALL-UNNAMED' '--add-opens=java.desktop/sun.awt=ALL-UNNAMED' '--add-opens=java.desktop/sun.awt.windows=ALL-UNNAMED' '--add-opens=java.desktop/sun.java2d=ALL-UNNAMED' '--add-opens=java.base/java.lang=ALL-UNNAMED' '-jar' 'dist\\Game_Of_Life_On_GPU.jar'",
+            "group": "test",
+            "dependsOn": "Build JAR",
+            "problemMatcher": []
+        }
+    ]
+}
