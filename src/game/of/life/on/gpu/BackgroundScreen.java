@@ -12,9 +12,10 @@ public class BackgroundScreen {
 
     public BackgroundScreen(PApplet window) { this.w = window; }
 
-    public void drawScreen() {
-        // Smooth scroll
-        scrollY = PApplet.lerp(scrollY, scrollTarget, 0.12f);
+    public void drawScreen(float dt) {
+        // V5.0: Time-based smooth scroll (framerate-independent)
+        float scrollRate = 1.0f - (float) Math.exp(-7.0 * dt);  // ~0.12 at 60fps
+        scrollY += (scrollTarget - scrollY) * scrollRate;
 
         // ── Background gradient ──
         w.noStroke();
@@ -212,6 +213,25 @@ public class BackgroundScreen {
             "a task that would take minutes on the CPU.\n\n" +
             "This is the same parallel computing paradigm used in machine learning, physics " +
             "simulation, ray tracing, and scientific computing.");
+        y += 20;
+
+        // ════════════════════════════════════════════════
+        //  SECTION 9: V4.0 — BEYOND CONWAY
+        // ════════════════════════════════════════════════
+        y = drawSectionTitle(y, "VIII. V4.0 — BEYOND CONWAY'S RULES");
+        y = drawCard(cx, y, cw, 220,
+            "Version 4.0 of this project introduces MULTIPLE RULE SETS, proving that Conway's " +
+            "rules are just one point in an infinite space of cellular automata:\n\n" +
+            "\u2022 HIGHLIFE (B36/S23): Identical to Conway except birth also occurs at 6 neighbors. " +
+            "This single change creates a 'replicator' — a pattern that copies itself!\n\n" +
+            "\u2022 DAY & NIGHT (B3678/S34678): A symmetric rule where dead and alive cells are " +
+            "interchangeable. Produces beautiful, organic, expanding patterns.\n\n" +
+            "\u2022 SEEDS (B2/S): Every cell dies after exactly one generation. Creates explosive, " +
+            "fractal-like growth patterns — pure ephemeral beauty.\n\n" +
+            "\u2022 DIAMOEBA (B35678/S5678): Grows diamond-shaped amoeba-like blobs that merge " +
+            "and split unpredictably. Demonstrates how tiny rule changes create alien worlds.\n\n" +
+            "V4.0 also adds a HEATMAP mode that colors cells by age, revealing which structures " +
+            "are ancient (white-hot) versus freshly born (cool blue).");
 
         // Update max scroll based on actual content height
         maxScroll = Math.max(0, y + scrollY - w.height + 80);

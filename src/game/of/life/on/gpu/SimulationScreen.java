@@ -1,143 +1,316 @@
-import processing.core.PApplet; // Processing core for drawing primitives and text
-import java.util.ArrayList;      // Dynamic array for the simulation button list
+import processing.core.PApplet;
 
 /**
- * SimulationScreen — Renders the interactive simulation screen where users can
- * draw cells, play/pause the automaton, change brush size, and spawn patterns.
- * Owns its own button bar and handles simulation-specific input events.
+ * SimulationScreen V4.0 — GPU-quality rendering, zoom/pan, analytics HUD,
+ * multiple rule sets, adjustable speed, and heatmap toggle.
+ *
+ * V4.0 CHANGES:
+ *   - CPU simulation via Grid.updateToNextGeneration() (supports all rule sets + age tracking)
+ *   - Pixel-buffer rendering (no more 65K rect() calls)
+ *   - Mouse-wheel zoom (1x to 16x) with click-drag panning
+ *   - Minimap when zoomed in
+ *   - Live analytics HUD (population sparkline, born/died, GPS)
+ *   - Speed multiplier (1x, 2x, 5x, 10x, MAX)
  */
 public class SimulationScreen implements ThemeConstants {
 
-    private Main app;                            // Reference to main application for drawing and state
-    private ArrayList<DashButton> simButtons;    // Bottom toolbar buttons (Play, Clear, Brush, etc.)
+    private Main app;
+    private SimulationUI ui;
 
-    /**
-     * Constructor — Creates the simulation toolbar buttons.
-     * @param app  Main application instance
-     */
+    // V4.0: Zoom and pan
+    float zoomLevel = 1.0f;
+    float panX = 0, panY = 0;
+    private boolean isDragging = false;
+    private float dragStartX, dragStartY;
+    private float panStartX, panStartY;
+
+    // V4.0: Speed and display
+    int speedLevel = 0;          // Index into SPEED_LEVELS
+    boolean showHeatmap = false;
+    boolean showHUD = false;
+
+    // V4.0: Analytics
+    private long lastStepTime = 0;
+    private float gensPerSec = 0;
+    private int stepsSinceLastCalc = 0;
+    private long lastGPSCalc = 0;
+
     public SimulationScreen(Main app) {
-        this.app = app;                          // Store reference to main application
-        simButtons = new ArrayList<>();          // Initialize button list
-        // Define button labels and their accent colors
-        String[] labels = {"▶  PLAY", "✕  CLEAR", "BRUSH 1x1", "GLIDER", "GUN", "← MENU"};
-        int[] colors = {GREEN, RED, WHITE_DIM, CYAN, PURPLE, WHITE_DIM};
-        for (int i = 0; i < labels.length; i++) // Create each button with its label and color
-            simButtons.add(new DashButton(app, 0, 0, 120, 42, labels[i], colors[i]));
+        this.app = app;
+        this.ui = new SimulationUI(app);
     }
 
-    /** Renders the full simulation screen for one frame. */
-    public void draw() {
-        GridRenderer.drawBackground(app);                         // Dark gradient base layer
+    public void draw(float dt) {
+        GridRenderer.drawBackground(app);
 
-        // --- Calculate grid layout (centered, with margins) ---
-        int gridAreaW = app.width - 50;                           // Grid area width with margins
-        int gridAreaH = app.height - 90;                          // Grid area height (top/bottom bars)
-        int cs = Math.max(1, Math.min(gridAreaW, gridAreaH) / 60); // Cell size to fit 60 cells
-        int offsetX = 25 + (gridAreaW - cs * 60) / 2;            // Center grid horizontally
-        int offsetY = 50 + (gridAreaH - cs * 60) / 2;            // Center grid vertically
+        // --- Simulation stepping ---
+        if (!app.isPaused) {
+            int stepsPerFrame = SPEED_LEVELS[speedLevel];
+            if (stepsPerFrame == 0) stepsPerFrame = 1; // MAX = every frame
+            boolean shouldStep = (stepsPerFrame == 1 && app.frameCount % SimulationUI.STEP_INTERVAL == 0)
+                || stepsPerFrame > 1;
+            if (shouldStep) {
+                int count = (stepsPerFrame <= 1) ? 1 : stepsPerFrame;
+                for (int i = 0; i < count; i++) {
+                    app.gameBoard.updateToNextGeneration();
+                    stepsSinceLastCalc++;
+                }
+            }
+        }
 
-        GridRenderer.drawGrid(app, app.gameBoard, cs, offsetX, offsetY, 1.0f); // Full opacity grid
+        // GPS calculation
+        long now = System.currentTimeMillis();
+        if (now - lastGPSCalc > 500) {
+            float elapsed = (now - lastGPSCalc) / 1000f;
+            if (elapsed > 0) gensPerSec = stepsSinceLastCalc / elapsed;
+            stepsSinceLastCalc = 0;
+            lastGPSCalc = now;
+        }
 
-        // Advance simulation every 5 frames when not paused
-        if (!app.isPaused && app.frameCount % 5 == 0)
-            app.gameBoard.updateToNextGeneration();                // Step the automaton forward
+        // --- Grid rendering area ---
+        int topH = SimulationUI.topBarHeight();
+        int botH = SimulationUI.bottomBarHeight();
+        int mx = SimulationUI.gridMarginX();
+        int gw = app.width - mx * 2;
+        int gh = app.height - topH - botH;
 
-        // --- Top status bar ---
-        app.noStroke();                                           // No outline on bar
-        app.fill(10, 15, 25, 220);                                // Semi-transparent dark background
-        app.rect(0, 0, app.width, 44);                            // Draw the bar rectangle
-        app.stroke(0, 255, 224, 40);                              // Cyan accent line
-        app.strokeWeight(1);                                      // 1px thickness
-        app.line(0, 44, app.width, 44);                           // Bottom edge of top bar
+        // Base cell size (fits grid in view)
+        float baseCellSize = Math.min((float) gw / GRID_SIZE, (float) gh / GRID_SIZE);
+        float cellSize = baseCellSize * zoomLevel;
+        float gridW = GRID_SIZE * cellSize;
+        float gridH = GRID_SIZE * cellSize;
+        float gridX = mx + (gw - gridW) / 2f + panX;
+        float gridY = topH + (gh - gridH) / 2f + panY;
 
-        app.fill(255, 255, 255, 200);                             // Bright white for title
-        app.textAlign(PApplet.LEFT, PApplet.CENTER);              // Left-align the title
-        app.textSize(16);                                         // Title font size
-        app.text("SIMULATION", 20, 22);                           // Section title
+        // Clip to grid area
+        app.clip(mx, topH, gw, gh);
 
-        // Status indicator (red=paused, green=running)
-        app.fill(app.isPaused ? 0xFFFF4757 : 0xFF2ED573);        // Red if paused, green if running
-        app.textAlign(PApplet.RIGHT, PApplet.CENTER);             // Right-align the indicator
-        app.textSize(12);                                         // Indicator font size
-        app.text(app.isPaused ? "● PAUSED" : "● RUNNING", app.width - 20, 22); // Status text
+        // Draw grid using fast pixel buffer
+        GridRenderer.drawGridAdvanced(app, app.gameBoard,
+            (int) gridX, (int) gridY, (int) gridW, (int) gridH, 1.0f, showHeatmap);
 
-        // Center stats display (generation, population, FPS)
-        app.fill(255, 255, 255, 80);                              // Dim white for stats
-        app.textAlign(PApplet.CENTER, PApplet.CENTER);            // Center-align stats
-        app.text("GEN: " + app.frameCount / 5 + "   |   POP: "
-                + GridRenderer.countAlive(app.gameBoard) + "   |   "
-                + (int) app.frameRate + " FPS", app.width / 2f, 22); // Stats string
+        app.noClip();
 
-        // --- Bottom button bar ---
-        app.noStroke();                                           // No outline on bar
-        app.fill(10, 15, 25, 220);                                // Semi-transparent dark background
-        app.rect(0, app.height - 60, app.width, 60);              // Draw the bar rectangle
-        app.stroke(255, 255, 255, 15);                            // Faint white separator
-        app.strokeWeight(1);                                      // 1px thickness
-        app.line(0, app.height - 60, app.width, app.height - 60); // Top edge of bottom bar
+        // --- Minimap when zoomed ---
+        if (zoomLevel > 1.5f) {
+            float mmSize = 80;
+            float mmX = app.width - mx - mmSize - 5;
+            float mmY = topH + 5;
+            app.noStroke();
+            app.fill(0, 0, 0, 180);
+            app.rect(mmX - 2, mmY - 2, mmSize + 4, mmSize + 4, 4);
+            GridRenderer.drawGridAdvanced(app, app.gameBoard,
+                (int) mmX, (int) mmY, (int) mmSize, (int) mmSize, 0.7f, showHeatmap);
+            // Viewport indicator
+            float vpRatio = 1f / zoomLevel;
+            float vpW = mmSize * vpRatio;
+            float vpH = mmSize * vpRatio;
+            float vpOffX = -panX / gridW * mmSize;
+            float vpOffY = -panY / gridH * mmSize;
+            app.noFill();
+            app.stroke(CYAN, 200);
+            app.strokeWeight(1);
+            app.rect(mmX + (mmSize - vpW) / 2f + vpOffX,
+                     mmY + (mmSize - vpH) / 2f + vpOffY, vpW, vpH);
+        }
 
-        // Update dynamic button labels based on current state
-        simButtons.get(0).label = app.isPaused ? "▶  PLAY" : "⏸  PAUSE"; // Toggle play/pause label
-        simButtons.get(0).baseColor = app.isPaused ? GREEN : ORANGE;      // Toggle button color
-        simButtons.get(2).label = "BRUSH " + app.brushSize + "x" + app.brushSize; // Show brush size
+        // --- Top bar ---
+        app.noStroke();
+        app.fill(10, 15, 25, 220);
+        app.rect(0, 0, app.width, topH);
+        app.stroke(0, 255, 224, 40);
+        app.strokeWeight(1);
+        app.line(0, topH, app.width, topH);
 
-        // Layout buttons evenly across the bottom bar
-        float btnW = Math.min(140, (app.width - 100) / 6f);      // Responsive button width
-        float total = btnW * simButtons.size() + 12 * (simButtons.size() - 1); // Total bar width
-        float bx = (app.width - total) / 2f;                     // Center the button row
-        for (int i = 0; i < simButtons.size(); i++) {             // Iterate over each button
-            DashButton b = simButtons.get(i);                     // Get button at index i
-            b.setPos(bx + i * (btnW + 12), app.height - 50, btnW, 38); // Position with gaps
-            b.update(app.mouseX, app.mouseY);                      // Update hover animation
-            b.display();                                           // Render the button
+        app.fill(255, 255, 255, 200);
+        app.textAlign(PApplet.LEFT, PApplet.CENTER);
+        app.textSize(20);
+        app.text(SimulationUI.SCREEN_TITLE, 20, 22);
+
+        app.fill(app.isPaused ? SimulationUI.PAUSED_INDICATOR_COLOR
+                              : SimulationUI.RUNNING_INDICATOR_COLOR);
+        app.textAlign(PApplet.RIGHT, PApplet.CENTER);
+        app.textSize(16);
+        app.text(app.isPaused ? SimulationUI.PAUSED_TEXT
+                              : SimulationUI.RUNNING_TEXT, app.width - 20, 22);
+
+        // Center stats
+        app.fill(255, 255, 255, 80);
+        app.textAlign(PApplet.CENTER, PApplet.CENTER);
+        app.textSize(15);
+        String rn = RULE_NAMES[app.gameBoard.getRuleSet()];
+        app.text("GEN: " + app.gameBoard.generationNum
+            + "  |  POP: " + String.format("%,d", app.gameBoard.population)
+            + "  |  " + rn
+            + "  |  " + (int) app.frameRate + " FPS", app.width / 2f, 22);
+
+        // --- Analytics HUD ---
+        if (showHUD) drawAnalyticsHUD();
+
+        // --- Bottom bar ---
+        app.noStroke();
+        app.fill(10, 15, 25, 220);
+        app.rect(0, app.height - botH, app.width, botH);
+        app.stroke(255, 255, 255, 15);
+        app.strokeWeight(1);
+        app.line(0, app.height - botH, app.width, app.height - botH);
+
+        ui.updateDynamicLabels(app.isPaused, app.brushSize,
+            app.gameBoard.getRuleSet(), speedLevel);
+        ui.layoutButtons(app);
+        for (int i = 0; i < ui.buttons.size(); i++) {
+            ui.buttons.get(i).update(app.mouseX, app.mouseY, dt);
+            ui.buttons.get(i).display();
         }
     }
 
-    /** Handles mouse clicks: toolbar buttons or cell drawing. */
+    /** Draws the analytics overlay with sparkline and stats. */
+    private void drawAnalyticsHUD() {
+        float hx = 20, hy = SimulationUI.topBarHeight() + 10;
+        float hw = 220, hh = 130;
+
+        // Background panel
+        app.noStroke();
+        app.fill(10, 15, 25, 210);
+        app.rect(hx, hy, hw, hh, 8);
+        app.stroke(0, 255, 224, 40);
+        app.strokeWeight(1);
+        app.noFill();
+        app.rect(hx, hy, hw, hh, 8);
+
+        // Stats text
+        app.fill(255, 255, 255, 180);
+        app.textAlign(PApplet.LEFT, PApplet.TOP);
+        app.textSize(14);
+        float ty = hy + 8;
+        app.text("POP: " + String.format("%,d", app.gameBoard.population), hx + 10, ty);
+        app.text("PEAK: " + String.format("%,d", app.gameBoard.peakPop), hx + 120, ty);
+        ty += 14;
+        app.fill(0, 255, 224, 160);
+        app.text("BORN: +" + app.gameBoard.bornThisGen, hx + 10, ty);
+        app.fill(255, 71, 87, 160);
+        app.text("DIED: -" + app.gameBoard.diedThisGen, hx + 120, ty);
+        ty += 14;
+        app.fill(255, 159, 67, 160);
+        app.text("GPS: " + String.format("%.0f", gensPerSec), hx + 10, ty);
+        app.fill(255, 255, 255, 80);
+        app.text("ZOOM: " + String.format("%.1f×", zoomLevel), hx + 120, ty);
+
+        // Sparkline
+        float sx = hx + 10, sy = ty + 18, sw = hw - 20, sh = 45;
+        app.fill(255, 255, 255, 8);
+        app.noStroke();
+        app.rect(sx, sy, sw, sh, 4);
+
+        int[] hist = app.gameBoard.popHistory;
+        int idx = app.gameBoard.popHistIdx;
+        int maxPop = 1;
+        for (int i = 0; i < hist.length; i++)
+            if (hist[i] > maxPop) maxPop = hist[i];
+
+        app.noFill();
+        app.stroke(0, 255, 224, 150);
+        app.strokeWeight(1);
+        app.beginShape();
+        for (int i = 0; i < hist.length; i++) {
+            int di = (idx - hist.length + i + hist.length * 2) % hist.length;
+            float val = (float) hist[di] / maxPop;
+            app.vertex(sx + i * (sw / hist.length), sy + sh * (1 - val));
+        }
+        app.endShape();
+    }
+
+    // --- Input handling ---
+
     public void handleMousePressed(float mx, float my) {
-        if (my > app.height - 60) {                                // Click is in the bottom bar
-            if (simButtons.get(0).checkClick(mx, my))              // Play/Pause button
-                app.isPaused = !app.isPaused;                      // Toggle pause state
-            else if (simButtons.get(1).checkClick(mx, my))         // Clear button
-                app.gameBoard.clearBoard();                        // Erase all cells
-            else if (simButtons.get(2).checkClick(mx, my))         // Brush size toggle
-                app.brushSize = (app.brushSize == 1) ? 3 : 1;     // Toggle between 1x1 and 3x3
-            else if (simButtons.get(3).checkClick(mx, my))         // Glider button
-                PatternLibrary.spawnGlider(app.gameBoard, 30, 30); // Spawn glider at center
-            else if (simButtons.get(4).checkClick(mx, my))         // Gun button
-                PatternLibrary.spawnGliderGun(app.gameBoard);      // Spawn Gosper's glider gun
-            else if (simButtons.get(5).checkClick(mx, my))         // Menu button
-                app.appState = 0;                                  // Return to dashboard menu
-        } else if (my > 44) {                                      // Click is on the grid area
-            drawWithBrush();                                       // Paint cells at mouse position
+        if (my > app.height - SimulationUI.bottomBarHeight()) {
+            if (ui.buttons.get(0).checkClick(mx, my)) app.isPaused = !app.isPaused;
+            else if (ui.buttons.get(1).checkClick(mx, my)) app.gameBoard.clearBoard();
+            else if (ui.buttons.get(2).checkClick(mx, my))
+                app.brushSize = (app.brushSize == 1) ? 3 : (app.brushSize == 3) ? 5 : 1;
+            else if (ui.buttons.get(3).checkClick(mx, my))
+                PatternLibrary.spawnGlider(app.gameBoard, GRID_SIZE/2, GRID_SIZE/2);
+            else if (ui.buttons.get(4).checkClick(mx, my))
+                PatternLibrary.spawnGliderGun(app.gameBoard);
+            else if (ui.buttons.get(5).checkClick(mx, my)) {
+                int next = (app.gameBoard.getRuleSet() + 1) % RULE_COUNT;
+                app.gameBoard.setRuleSet(next);
+            }
+            else if (ui.buttons.get(6).checkClick(mx, my))
+                speedLevel = (speedLevel + 1) % SPEED_LEVELS.length;
+            else if (ui.buttons.get(7).checkClick(mx, my)) {
+                showHUD = !showHUD;
+            }
+            else if (ui.buttons.get(8).checkClick(mx, my))
+                app.transitionTo(0);
+        } else if (my > SimulationUI.topBarHeight()) {
+            // Check if alt/shift held for panning, otherwise draw
+            if (app.mouseButton == PApplet.RIGHT || app.keyPressed && app.key == ' ') {
+                isDragging = true;
+                dragStartX = mx; dragStartY = my;
+                panStartX = panX; panStartY = panY;
+            } else {
+                drawWithBrush();
+            }
         }
     }
 
-    /** Handles mouse dragging for continuous cell painting. */
     public void handleMouseDragged(float mx, float my) {
-        if (my > 44 && my < app.height - 60)                      // Only paint within grid bounds
-            drawWithBrush();                                       // Paint cells under the cursor
+        if (isDragging) {
+            panX = panStartX + (mx - dragStartX);
+            panY = panStartY + (my - dragStartY);
+        } else if (my > SimulationUI.topBarHeight()
+                && my < app.height - SimulationUI.bottomBarHeight()) {
+            drawWithBrush();
+        }
     }
 
-    /** Handles keyboard shortcuts (space=play/pause, c=clear). */
+    public void handleMouseReleased() {
+        isDragging = false;
+    }
+
+    public void handleMouseWheel(float count) {
+        float oldZoom = zoomLevel;
+        zoomLevel *= (count < 0) ? 1.15f : 0.87f;
+        zoomLevel = PApplet.constrain(zoomLevel, 1.0f, 16.0f);
+        if (zoomLevel <= 1.01f) { panX = 0; panY = 0; }
+        // Zoom toward center
+        panX *= zoomLevel / oldZoom;
+        panY *= zoomLevel / oldZoom;
+    }
+
     public void handleKeyPressed() {
-        if (app.key == ' ') app.isPaused = !app.isPaused;         // Space toggles play/pause
-        if (app.key == 'c' || app.key == 'C')                     // C clears the board
-            app.gameBoard.clearBoard();                            // Erase all cells
+        if (app.key == ' ') app.isPaused = !app.isPaused;
+        if (app.key == 'c' || app.key == 'C') app.gameBoard.clearBoard();
+        if (app.key == 'h' || app.key == 'H') showHUD = !showHUD;
+        if (app.key == 'm' || app.key == 'M') showHeatmap = !showHeatmap;
+        if (app.key == 'r' || app.key == 'R') {
+            int next = (app.gameBoard.getRuleSet() + 1) % RULE_COUNT;
+            app.gameBoard.setRuleSet(next);
+        }
+        if (app.key == '+' || app.key == '=')
+            speedLevel = Math.min(speedLevel + 1, SPEED_LEVELS.length - 1);
+        if (app.key == '-')
+            speedLevel = Math.max(speedLevel - 1, 0);
     }
 
-    /** Paints cells at the mouse position using the current brush size. */
     private void drawWithBrush() {
-        int gw = app.width - 50;                                  // Grid area width
-        int gh = app.height - 90;                                 // Grid area height
-        int cs = Math.max(1, Math.min(gw, gh) / 60);              // Cell size in pixels
-        int offsetX = 25 + (gw - cs * 60) / 2;                    // Grid X offset
-        int offsetY = 50 + (gh - cs * 60) / 2;                    // Grid Y offset
-        int baseC = (app.mouseX - offsetX) / cs;                  // Column under the mouse
-        int baseR = (app.mouseY - offsetY) / cs;                  // Row under the mouse
-        for (int i = 0; i < app.brushSize; i++)                    // Iterate brush rows
-            for (int j = 0; j < app.brushSize; j++)                // Iterate brush columns
-                if (baseR+i >= 0 && baseR+i < 60 && baseC+j >= 0 && baseC+j < 60) // Bounds check
-                    app.gameBoard.setCellState(baseR + i, baseC + j, true); // Set cell alive
+        int gs = GRID_SIZE;
+        int mx2 = SimulationUI.gridMarginX();
+        int gw = app.width - mx2 * 2;
+        int gh = app.height - SimulationUI.topBarHeight() - SimulationUI.bottomBarHeight();
+        float baseCellSize = Math.min((float) gw / gs, (float) gh / gs);
+        float cellSize = baseCellSize * zoomLevel;
+        float gridW = gs * cellSize;
+        float gridH = gs * cellSize;
+        float gridX = mx2 + (gw - gridW) / 2f + panX;
+        float gridY = SimulationUI.topBarHeight() + (gh - gridH) / 2f + panY;
+        int baseC = (int) ((app.mouseX - gridX) / cellSize);
+        int baseR = (int) ((app.mouseY - gridY) / cellSize);
+        for (int i = 0; i < app.brushSize; i++)
+            for (int j = 0; j < app.brushSize; j++)
+                if (baseR+i >= 0 && baseR+i < gs && baseC+j >= 0 && baseC+j < gs)
+                    app.gameBoard.setCellState(baseR + i, baseC + j, true);
+        app.gameBoard.recount();
     }
 }

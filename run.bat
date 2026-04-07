@@ -16,6 +16,10 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
+REM --- Sync data files (shaders) to dist ---
+echo Syncing data files...
+xcopy /Y /Q "data\*.*" "dist\data\" >nul 2>&1
+
 REM --- Build JAR ---
 echo Building JAR...
 (

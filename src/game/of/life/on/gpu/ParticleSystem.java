@@ -63,24 +63,24 @@ public class ParticleSystem implements ThemeConstants {
     }
 
     /**
-     * updateAndDraw — Moves every particle by its velocity, fades it out, and draws it.
-     * Particles that go off-screen or become fully transparent are recycled.
-     * Should be called once per frame in the draw loop.
+     * V5.0: Time-based updateAndDraw — moves particles and draws them.
+     * Movement and fading speeds are framerate-independent.
+     * @param dt  deltaTime in seconds since last frame
      */
-    public void updateAndDraw() {
+    public void updateAndDraw(float dt) {
         // Disable stroke outlines so particles are drawn as solid filled circles
         p.noStroke();
+        // Time-scale factor: normalizes to 60fps equivalent behavior
+        float timeScale = dt * 60f;
         // Iterate over every particle in the system
         for (int i = 0; i < numParticles; i++) {
-            // Advance the particle's X position by its horizontal velocity
-            ptX[i] += ptVx[i];
-            // Advance the particle's Y position by its vertical velocity (negative = upward)
-            ptY[i] += ptVy[i];
-            // Gradually reduce the particle's opacity to create a smooth fade-out effect
-            ptAlpha[i] -= 0.15f;
+            // V5.0: Time-scaled position updates
+            ptX[i] += ptVx[i] * timeScale;
+            ptY[i] += ptVy[i] * timeScale;
+            // V5.0: Time-scaled alpha decay
+            ptAlpha[i] -= 0.15f * timeScale;
             // Check if the particle has fully faded out or drifted beyond the screen edges
             if (ptAlpha[i] <= 0 || ptX[i] < -10 || ptX[i] > p.width + 10 || ptY[i] < -10 || ptY[i] > p.height + 10) {
-                // Recycle the expired particle to a fresh random position
                 resetParticle(i);
             }
             // Calculate a sinusoidal pulse offset for a subtle twinkling/breathing effect

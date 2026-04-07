@@ -1,203 +1,167 @@
-import processing.core.PApplet;     // Processing core — the main application framework
-import processing.event.MouseEvent; // Processing event class for mouse wheel events
+import processing.core.PApplet;
+import processing.event.MouseEvent;
 
 /**
- * Main — The central orchestrator of the Game of Life Dashboard application.
- * Extends Processing's PApplet to provide the window, draw loop, and event hooks.
- *
- * DESIGN: This class is now a slim coordinator that delegates rendering and input
- * to dedicated screen classes (MenuScreen, SimulationScreen, GPULabScreen) and
- * utility modules (GPUCompute, ParticleSystem, GridRenderer, PatternLibrary).
- * It holds only the shared state that multiple screens need to access.
- *
- * APPLICATION STATES:
- *   0 = Dashboard Menu
- *   1 = Background & Theory (handled by BackgroundScreen)
- *   2 = Interactive Simulation
- *   3 = GPU Compute Lab
+ * Main V4.0 — Adds smooth screen transitions, mouse wheel zoom delegation,
+ * and shared state for rule sets and heatmap.
  */
 public class Main extends PApplet implements ThemeConstants {
 
-    // ═══════════════════════════════════════════════════════
-    //                   SHARED STATE
-    // ═══════════════════════════════════════════════════════
-
-    // The 60x60 grid data model holding all cell alive/dead states
     Grid gameBoard;
-
-    // The scrollable theory/background knowledge screen
     BackgroundScreen bgScreen;
-
-    // Current application state: 0=Menu, 1=Theory, 2=Simulation, 3=GPU Lab
-    int appState = 0;
-
-    // Whether the simulation is currently paused (applies to Simulation screen)
+    int appState = 0;       // 0=Menu, 1=Theory, 2=Simulation, 3=GPU Lab
     boolean isPaused = true;
-
-    // Current brush size for cell painting (1x1 or 3x3)
     int brushSize = 1;
 
-    // ═══════════════════════════════════════════════════════
-    //                  MODULE REFERENCES
-    // ═══════════════════════════════════════════════════════
-
-    // GPU computation module (shader, buffers, batching logic)
     private GPUCompute gpuCompute;
-
-    /** Returns the GPU compute module (used by GPULabScreen and MenuScreen). */
     public GPUCompute getGpuCompute() { return gpuCompute; }
-
-    // Ambient floating particle effect for the menu background
     ParticleSystem particleSystem;
-
-    // Screen renderers — each owns its own UI components and handles its input
     MenuScreen menuScreen;
     SimulationScreen simScreen;
     GPULabScreen gpuLabScreen;
 
-    // ═══════════════════════════════════════════════════════
-    //                   ENTRY POINT
-    // ═══════════════════════════════════════════════════════
+    // V5.0: Frame-rate independent timing
+    float deltaTime = 1f / 60f;     // Seconds since last frame (initialized to 60fps)
+    private long lastFrameNanos = 0; // Nanosecond timestamp of previous frame
 
-    /**
-     * main — JVM entry point. Loads the AWT native library (required by Processing
-     * on some JDK/JOGL configurations) and launches the PApplet.
-     */
+    // V5.0: DPI-aware UI scale factor
+    public float uiScale = 1.0f;
+
+    // V4.0: Screen transitions
+    int transPhase = 0;     // 0=idle, 1=fading out, 2=fading in
+    float transAlpha = 0;   // 0..1 overlay darkness
+    int pendingState = -1;
+
     public static void main(String[] args) {
-        // Attempt to load the Java AWT native library (silently ignore if unavailable)
         try { System.loadLibrary("jawt"); } catch (UnsatisfiedLinkError e) {}
-        // Launch this class as a Processing sketch
         PApplet.main("Main");
     }
 
-    // ═══════════════════════════════════════════════════════
-    //                  PROCESSING LIFECYCLE
-    // ═══════════════════════════════════════════════════════
-
-    /**
-     * settings — Called once before setup(). Configures the window size and renderer.
-     * Must use P2D (OpenGL) renderer for GPU shader compatibility.
-     */
     public void settings() {
-        // Set the initial window size to 1280x720 using the OpenGL P2D renderer
         size(1280, 720, P2D);
-        // Set pixel density to 1 (no HiDPI scaling) for consistent grid rendering
         pixelDensity(1);
-        // Disable anti-aliasing for sharp pixel-level cell rendering
         noSmooth();
     }
 
-    /**
-     * setup — Called once after the window is created. Initializes all game state,
-     * UI modules, and GPU compute resources.
-     */
     public void setup() {
-        // Allow the user to resize the application window
         surface.setResizable(true);
-        // Set the window title bar text
-        surface.setTitle("GAME OF LIFE — DASHBOARD");
+        surface.setTitle("GAME OF LIFE V5.0 — DASHBOARD");
 
-        // Create the 60x60 game grid with all cells initially dead
-        gameBoard = new Grid(60, 60);
-        // Create the theory/background knowledge screen
+        // V5.0: Compute DPI scale factor for high-resolution displays
+        uiScale = (float) displayDensity();
+        if (uiScale < 1.0f) uiScale = 1.0f;
+
+        // V5.0: Propagate scale factor to all UI configuration classes
+        MenuUI.uiScale = uiScale;
+        SimulationUI.uiScale = uiScale;
+        GPULabUI.uiScale = uiScale;
+
+        gameBoard = new Grid(GRID_SIZE, GRID_SIZE);
         bgScreen = new BackgroundScreen(this);
 
-        // Seed the grid with 300 random alive cells for the menu background animation
-        for (int i = 0; i < 300; i++)
-            gameBoard.setCellState((int) random(5, 55), (int) random(5, 55), true);
+        // Seed menu background
+        int seedCount = (GRID_SIZE * GRID_SIZE) / 12;
+        for (int i = 0; i < seedCount; i++)
+            gameBoard.setCellState((int) random(5, GRID_SIZE - 5),
+                                   (int) random(5, GRID_SIZE - 5), true);
 
-        // Initialize the GPU compute module (loads shader, creates ping-pong buffers)
         gpuCompute = new GPUCompute(this);
-        // Initialize the ambient particle system with 80 floating particles
         particleSystem = new ParticleSystem(this, 80);
-
-        // Create each screen module — each owns its own UI components
         menuScreen = new MenuScreen(this);
         simScreen = new SimulationScreen(this);
         gpuLabScreen = new GPULabScreen(this);
+
+        lastFrameNanos = System.nanoTime(); // Initialize timing baseline
     }
 
-    // ═══════════════════════════════════════════════════════
-    //                     DRAW LOOP
-    // ═══════════════════════════════════════════════════════
+    /** V4.0: Triggers a smooth fade transition to the target screen. */
+    public void transitionTo(int newState) {
+        if (transPhase != 0) return;
+        pendingState = newState;
+        transPhase = 1;
+        transAlpha = 0;
+    }
 
-    /**
-     * draw — Called every frame (~60 FPS). Processes any active GPU computation,
-     * then delegates rendering to the current screen based on appState.
-     */
     public void draw() {
-        // If a GPU computation is in progress, process one batch of iterations this frame
+        // V5.0: Compute deltaTime (clamped to prevent physics explosions on lag spikes)
+        long now = System.nanoTime();
+        deltaTime = (now - lastFrameNanos) / 1_000_000_000f;
+        deltaTime = Math.max(0.001f, Math.min(deltaTime, 0.1f)); // Clamp 1ms..100ms
+        lastFrameNanos = now;
+
+        // V5.0: Time-based transition phases (~0.3s fade each direction)
+        float transSpeed = 3.5f; // 1/0.3 ≈ 3.3, slightly faster for snappiness
+        if (transPhase == 1) {
+            transAlpha += transSpeed * deltaTime;
+            if (transAlpha >= 1.0f) {
+                transAlpha = 1.0f;
+                appState = pendingState;
+                // State-entry setup
+                if (appState == 2) { gameBoard.clearBoard(); isPaused = true; }
+                else if (appState == 3) { gameBoard.clearBoard(); gpuCompute.hasComputed = false; }
+                transPhase = 2;
+            }
+        } else if (transPhase == 2) {
+            transAlpha -= transSpeed * deltaTime;
+            if (transAlpha <= 0) { transAlpha = 0; transPhase = 0; pendingState = -1; }
+        }
+
+        // GPU Lab batch processing
         if (gpuCompute.isComputing)
             gpuCompute.processBatch(gpuLabScreen.getIterationCount());
 
-        // Delegate rendering to the active screen
-        if (appState == 0)      menuScreen.draw(particleSystem);  // Dashboard menu
-        else if (appState == 1) bgScreen.drawScreen();            // Theory & background
-        else if (appState == 2) simScreen.draw();                 // Interactive simulation
-        else if (appState == 3) gpuLabScreen.draw();              // GPU compute lab
+        // Render current screen
+        if (appState == 0)      menuScreen.draw(particleSystem, deltaTime);
+        else if (appState == 1) bgScreen.drawScreen(deltaTime);
+        else if (appState == 2) simScreen.draw(deltaTime);
+        else if (appState == 3) gpuLabScreen.draw(deltaTime);
+
+        // V4.0: Transition overlay
+        if (transAlpha > 0.001f) {
+            noStroke();
+            fill(10, 15, 25, transAlpha * 255);
+            rect(0, 0, width, height);
+        }
     }
 
-    // ═══════════════════════════════════════════════════════
-    //                   INPUT DELEGATION
-    // ═══════════════════════════════════════════════════════
-
-    /**
-     * mousePressed — Processing callback for mouse clicks.
-     * Delegates to the current screen's input handler based on appState.
-     */
     public void mousePressed() {
-        if (appState == 0)                                        // Menu screen
+        if (transPhase != 0) return; // Block input during transitions
+        if (appState == 0)
             menuScreen.handleMousePressed(mouseX, mouseY);
-        else if (appState == 1) {                                 // Theory screen — back button
-            if (mouseX > 20 && mouseX < 140 && mouseY > 20 && mouseY < 60)
-                appState = 0;                                     // Return to menu
+        else if (appState == 1) {
+            if (mouseX > 20 && mouseX < 150 && mouseY > 14 && mouseY < 52)
+                transitionTo(0);
         }
-        else if (appState == 2)                                   // Simulation screen
+        else if (appState == 2)
             simScreen.handleMousePressed(mouseX, mouseY);
-        else if (appState == 3)                                   // GPU lab screen
+        else if (appState == 3)
             gpuLabScreen.handleMousePressed(mouseX, mouseY);
     }
 
-    /**
-     * mouseDragged — Processing callback for mouse drag events.
-     * Delegates to the current screen for cell painting or dial dragging.
-     */
     public void mouseDragged() {
-        if (appState == 2)                                        // Simulation: paint cells
-            simScreen.handleMouseDragged(mouseX, mouseY);
-        else if (appState == 3)                                   // GPU lab: dial or paint cells
-            gpuLabScreen.handleMouseDragged(mouseX, mouseY);
+        if (transPhase != 0) return;
+        if (appState == 2) simScreen.handleMouseDragged(mouseX, mouseY);
+        else if (appState == 3) gpuLabScreen.handleMouseDragged(mouseX, mouseY);
     }
 
-    /**
-     * mouseReleased — Processing callback for mouse release.
-     * Releases the GPU dial drag handle if active.
-     */
     public void mouseReleased() {
-        gpuLabScreen.handleMouseReleased();                       // End any active dial drag
+        if (appState == 2) simScreen.handleMouseReleased();
+        gpuLabScreen.handleMouseReleased();
     }
 
-    /**
-     * keyPressed — Processing callback for keyboard input.
-     * Delegates to the current screen's key handler.
-     */
     public void keyPressed() {
-        if (appState == 2)                                        // Simulation shortcuts
-            simScreen.handleKeyPressed();
-        else if (appState == 3)                                   // GPU lab iteration input
-            gpuLabScreen.handleKeyPressed();
-        else if (appState == 1) {                                 // Theory screen scrolling
-            if (keyCode == DOWN) bgScreen.scroll(3);              // Scroll down
-            else if (keyCode == UP) bgScreen.scroll(-3);          // Scroll up
+        if (transPhase != 0) return;
+        if (appState == 2) simScreen.handleKeyPressed();
+        else if (appState == 3) gpuLabScreen.handleKeyPressed();
+        else if (appState == 1) {
+            if (keyCode == DOWN) bgScreen.scroll(3);
+            else if (keyCode == UP) bgScreen.scroll(-3);
         }
     }
 
-    /**
-     * mouseWheel — Processing callback for mouse scroll wheel.
-     * Scrolls the theory screen content when on that screen.
-     */
     public void mouseWheel(MouseEvent event) {
-        if (appState == 1)                                        // Theory screen only
-            bgScreen.scroll(event.getCount());                    // Scroll by wheel delta
+        if (transPhase != 0) return;
+        if (appState == 1) bgScreen.scroll(event.getCount());
+        else if (appState == 2) simScreen.handleMouseWheel(event.getCount());
     }
 }

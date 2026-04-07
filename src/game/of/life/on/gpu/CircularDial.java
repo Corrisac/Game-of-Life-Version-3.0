@@ -27,9 +27,12 @@ public class CircularDial {
         this.unit = unit;
     }
     
-    public void update() {
-        displayValue = PApplet.lerp(displayValue, value, 0.08f);
-        pulsePhase += 0.03f;
+    /** V5.0: Time-based update for smooth, framerate-independent animation. */
+    public void update(float dt) {
+        // Exponential decay lerp: converges at consistent speed regardless of framerate
+        float rate = 1.0f - (float) Math.exp(-5.0 * dt);  // ~0.08 at 60fps
+        displayValue += (value - displayValue) * rate;
+        pulsePhase += 1.8f * dt;  // ~0.03 per frame at 60fps
     }
     
     public void display() {
