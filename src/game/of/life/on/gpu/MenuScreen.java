@@ -79,7 +79,6 @@ public class MenuScreen implements ThemeConstants {
         app.text(MenuUI.STATUS_BAR_PREFIX + (int) app.frameRate + " FPS",
                  app.width / 2f, app.height - MenuUI.STATUS_BAR_BOTTOM_OFFSET);
 
-        GridRenderer.drawCornerAccents(app);
     }
 
     public boolean handleMousePressed(float mx, float my) {

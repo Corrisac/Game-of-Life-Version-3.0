@@ -1,0 +1,808 @@
+================================================================================
+ GAME OF LIFE ON GPU - COMPLETE PROJECT DOCUMENTATION
+================================================================================
+ Version:  5.0
+ Platform: Java 17 + Processing 4.5.2 + JOGL 2.6.0
+ Package:  game.of.life.on.gpu (source: src/game/of/life/on/gpu/)
+================================================================================
+
+
++==============================================================================+
+|                        TABLE OF CONTENTS                                     |
++==============================================================================+
+|  1. PROJECT OVERVIEW                                                         |
+|  2. DIRECTORY STRUCTURE                                                      |
+|  3. HOW TO BUILD & RUN                                                       |
+|  4. APPLICATION ARCHITECTURE                                                 |
+|  5. FILE-BY-FILE DOCUMENTATION                                               |
+|     A. JAVA SOURCE FILES (src/game/of/life/on/gpu/)                          |
+|     B. SHADER FILES (data/)                                                  |
+|     C. BUILD & CONFIG FILES                                                  |
+|  6. CLASS DEPENDENCY GRAPH                                                   |
++==============================================================================+
+
+
+================================================================================
+ 1. PROJECT OVERVIEW
+================================================================================
+
+This is a GPU-accelerated Conway's Game of Life simulation built with
+Processing 4 (Java) and GLSL shaders. The application features:
+
+  - A futuristic PS5-inspired dashboard UI
+  - Real-time CPU simulation with multiple rule sets (Conway, HighLife, etc.)
+  - GPU bulk compute via raw JOGL with a K=4 multi-step shader
+  - Zoom/pan, heatmap mode, analytics HUD, and pattern spawning
+  - Smooth screen transitions between 4 application screens:
+      0 = Menu Dashboard
+      1 = Theory/Background (scrollable educational content)
+      2 = Interactive Simulation
+      3 = GPU Compute Lab
+
+  The project runs on Processing's P2D (OpenGL) renderer and uses a single
+  unified GLSL shader (conway.glsl) with preprocessor guards to support
+  both single-step and K=4 multi-step computation modes.
+
+
+================================================================================
+ 2. DIRECTORY STRUCTURE
+================================================================================
+
+Game Of Life On GPU/
++-- src/game/of/life/on/gpu/     <- Java source files (17 files)
++-- data/
+|   +-- conway.glsl              <- Unified GLSL shader (single-step + K=4 modes)
++-- build/classes/                <- Compiled .class files (auto-generated)
++-- dist/
+|   +-- Game_Of_Life_On_GPU.jar  <- Built JAR
+|   +-- data/                    <- Shader copied here at build time
+|   +-- lib/                     <- Processing & JOGL dependency JARs (7 files)
++-- .vscode/                     <- VS Code IDE configuration
++-- run.bat                      <- One-click build & launch script
++-- PROJECT_DOCUMENTATION.txt    <- This file
+
+
+================================================================================
+ 3. HOW TO BUILD & RUN
+================================================================================
+
+  Option A (Recommended):  Double-click run.bat
+    - Compiles all Java sources
+    - Syncs shader files to dist/data/
+    - Builds the JAR
+    - Launches the application
+
+  Option B (VS Code):  Run the "Run Game" task (Ctrl+Shift+B -> Run Game)
+    - Defined in .vscode/tasks.json
+    - Chains: Compile Java -> Build JAR -> Run Game
+
+  Requirements:
+    - JDK 17+ (expected at C:\Program Files\Apache NetBeans\jdk\)
+    - Processing 4 core library + JOGL (included in dist/lib/)
+
+
+================================================================================
+ 4. APPLICATION ARCHITECTURE
+================================================================================
+
+  +-------------------------------------------------------------+
+  |                        Main.java                            |
+  |              (PApplet entry point, screen router)           |
+  +--------+------------+--------------+------------------------+
+  | state=0|  state=1   |   state=2    |      state=3           |
+  |MenuScrn|BackgndScrn | SimScrn      | GPULabScrn             |
+  |+MenuUI |            | +SimUI       | +GPULabUI              |
+  |        |            |              | +CircularDial           |
+  +--------+------------+--------------+------------------------+
+  |                    SHARED COMPONENTS                        |
+  |  Grid . GridRenderer . GPUCompute . PatternLibrary          |
+  |  ParticleSystem . DashButton                                |
+  +-------------------------------------------------------------+
+  |                    CONFIGURATION                            |
+  |  ThemeConstants = UIColors + UILayout + SimulationRules      |
+  +-------------------------------------------------------------+
+
+  Data flow:
+    Grid (data model) <-> GridRenderer (display) <-> Screens (UI)
+    Grid (data model) <-> GPUCompute (GPU shader pipeline)
+
+
+================================================================================
+ 5. FILE-BY-FILE DOCUMENTATION
+================================================================================
+
+
+================================================================================
+ A. JAVA SOURCE FILES
+================================================================================
+
+
+--------------------------------------------------------------------------------
+ FILE: Main.java  (167 lines -> Entry Point)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Application entry point. Extends Processing's PApplet.
+  Owns all screen objects and routes input/rendering to the active screen.
+  Manages smooth screen transitions (fade out -> switch -> fade in).
+
+LINKED TO:
+  - Creates: Grid, BackgroundScreen, GPUCompute, ParticleSystem,
+    MenuScreen, SimulationScreen, GPULabScreen
+  - Implements: ThemeConstants (inherits all shared constants)
+  - Used by: All screens access Main via their 'app' field
+
+FIELDS:
+  - gameBoard (Grid)         : The shared cellular automaton data model
+  - bgScreen (BackgroundScreen) : Theory screen instance
+  - appState (int)           : Current screen (0=Menu, 1=Theory, 2=Sim, 3=Lab)
+  - isPaused (boolean)       : Whether simulation is paused
+  - brushSize (int)          : Cell painting brush size (1, 3, or 5)
+  - gpuCompute (GPUCompute)  : GPU computation engine
+  - particleSystem            : Floating particle effect for menu
+  - menuScreen, simScreen, gpuLabScreen : Screen instances
+  - deltaTime (float)        : Seconds since last frame (frame-rate independent)
+  - uiScale (float)          : DPI scale factor for high-res displays
+  - transPhase, transAlpha, pendingState : Transition animation state
+
+FUNCTIONS:
+
+  main(String[] args) -> void
+    Input:  Command-line args (unused)
+    Output: Launches the Processing application window
+
+  settings() -> void
+    Input:  None
+    Output: Configures window (1280x720, P2D renderer, pixel density 1)
+
+  setup() -> void
+    Input:  None
+    Output: Initializes all objects, seeds the background grid, computes DPI scale
+
+  transitionTo(int newState) -> void
+    Input:  Target screen index (0-3)
+    Output: Starts a smooth fade transition to the target screen
+
+  draw() -> void
+    Input:  None (called 60x per second by Processing)
+    Output: Updates deltaTime, processes transitions, delegates to active screen
+
+  mousePressed() -> void
+    Input:  Mouse position (mouseX, mouseY) from Processing
+    Output: Delegates click to the active screen (blocks during transitions)
+
+  mouseDragged() -> void
+    Input:  Mouse position during drag
+    Output: Delegates drag to simulation or GPU lab screen
+
+  mouseReleased() -> void
+    Input:  None
+    Output: Notifies screens that mouse was released (for drag termination)
+
+  keyPressed() -> void
+    Input:  Key code from Processing
+    Output: Delegates keyboard input to active screen
+
+  mouseWheel(MouseEvent event) -> void
+    Input:  Scroll wheel count
+    Output: Delegates to theory screen (scroll) or simulation (zoom)
+
+  getGpuCompute() -> GPUCompute
+    Input:  None
+    Output: Returns the GPU compute engine instance
+
+
+--------------------------------------------------------------------------------
+ FILE: BackgroundScreen.java  (339 lines -> Theory/History Screen)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Renders a scrollable educational screen about Conway's Game of Life.
+  Displays 8 content sections: Origins, Rules, Turing Completeness,
+  Emergence, Famous Patterns, Real-World Applications, GPU Acceleration,
+  and Beyond Conway's Rules.
+
+LINKED TO:
+  - Created by: Main.java
+  - Called from: Main.draw() when appState == 1
+  - Scroll input from: Main.keyPressed() and Main.mouseWheel()
+
+FIELDS:
+  - w (PApplet)          : Reference to the Processing window
+  - scrollY (float)      : Current smooth scroll position
+  - scrollTarget (float) : Target scroll position (input-driven)
+  - maxScroll (float)    : Maximum scroll depth based on content height
+
+FUNCTIONS:
+
+  BackgroundScreen(PApplet window)
+    Input:  PApplet reference
+    Output: Stores window reference
+
+  drawScreen(float dt) -> void
+    Input:  deltaTime for frame-rate independent scrolling
+    Output: Renders background gradient, back button, scroll indicator,
+            and all 8 content sections offset by scrollY
+
+  scroll(float amount) -> void
+    Input:  Scroll delta (positive = down, negative = up)
+    Output: Updates scrollTarget (clamped to 0..maxScroll)
+
+  drawSectionTitle(float y, String title) -> float
+  drawCard(...) -> float
+  drawRuleCard(...) -> float
+  drawPatternCard(...) -> float
+    Rendering helper methods for section layout.
+
+
+--------------------------------------------------------------------------------
+ FILE: CircularDial.java  (159 lines -> UI Component)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  A futuristic circular dial widget with glowing arcs, tick marks, and
+  a draggable value indicator. Used in the GPU Lab screen to select
+  the number of iterations (0 to 1,000,000).
+
+LINKED TO:
+  - Created by: GPULabUI constructor
+  - Used by: GPULabScreen (displays, handles input, reads value)
+
+FUNCTIONS:
+
+  CircularDial(PApplet p, float cx, float cy, float radius,
+               int maxValue, String unit)
+    Input:  Processing ref, center position, radius, max value, label
+    Output: Creates a new dial widget
+
+  update(float dt) -> void
+    Input:  deltaTime
+    Output: Smoothly interpolates displayValue toward value
+
+  display() -> void
+    Input:  None
+    Output: Renders the complete dial (background ring, tick marks, value arc,
+            glow bloom, edge dot, center value display, unit label)
+
+  checkPress(float mx, float my) -> boolean
+    Input:  Mouse position
+    Output: Returns true if click is within the dial ring; begins dragging
+
+  drag(float mx, float my) -> void
+    Input:  Mouse position during drag
+    Output: Updates the value based on mouse angle relative to dial center
+
+  release() -> void
+  getValue() -> int
+  setValue(int v) -> void
+  setPos(float ncx, float ncy, float nr) -> void
+
+
+--------------------------------------------------------------------------------
+ FILE: DashButton.java  (126 lines -> UI Component)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Futuristic neon-glow button with hover/press animation effects.
+  Used throughout the application for all navigation and action buttons.
+  Features PGraphics-cached glow bloom for performance.
+
+LINKED TO:
+  - Created by: MenuUI, SimulationUI, GPULabUI (stored in ArrayList<DashButton>)
+  - Used by: MenuScreen, SimulationScreen, GPULabScreen (update, display, checkClick)
+
+FUNCTIONS:
+
+  DashButton(PApplet p, float x, float y, float w, float h,
+             String label, int baseColor)
+    Input:  Processing ref, position, dimensions, label text, accent color
+    Output: Creates a new button
+
+  update(float mx, float my, float dt) -> void
+    Input:  Mouse position and deltaTime
+    Output: Updates hover detection and animation values (frame-rate independent)
+
+  display() -> void
+    Input:  None
+    Output: Renders button with scaling, glow cache, frosted body, press flash, label
+
+  checkClick(float mx, float my) -> boolean
+    Input:  Mouse position
+    Output: Returns true if click is inside button; triggers press animation
+
+  setPos(float nx, float ny, float nw, float nh) -> void
+    Input:  New position and dimensions
+    Output: Repositions the button; invalidates glow cache if size changed
+
+
+--------------------------------------------------------------------------------
+ FILE: GPUCompute.java  (~590 lines -> GPU Computation Engine)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Core GPU computation engine. Handles both:
+  1. Live simulation (1 step/frame via Processing API + conway.glsl single-step)
+  2. Bulk GPU Lab compute (millions of steps via raw JOGL + conway.glsl K=4)
+
+  Both paths use the same unified conway.glsl shader file. The K=4 path
+  prepends #define MULTI_STEP_K4 before compilation to activate the
+  multi-step branch. V3.0 uses raw JOGL calls (3 GL calls per pass vs 25
+  with Processing), achieving 33x reduced GL overhead.
+
+LINKED TO:
+  - Created by: Main.java
+  - Used by: SimulationScreen (stepOneGeneration, readBackToGrid)
+             GPULabScreen (startCompute, processBatch, progress/results)
+  - Implements: ThemeConstants (for GRID_SIZE)
+  - Loads shader: data/conway.glsl (both single-step and K=4 modes)
+
+FUNCTIONS:
+
+  GPUCompute(PApplet p)
+    Input:  Processing applet
+    Output: Loads conway.glsl, creates ping-pong buffers at GRID_SIZExGRID_SIZE
+
+  initRawGL() -> void  [private]
+    Output: Creates raw GL textures, FBOs, compiles conway.glsl (K=4), sets up VBO
+
+  compileShaderProgram(GL2ES2 gl) -> int  [private]
+    Output: Loads conway.glsl, prepends #define MULTI_STEP_K4, compiles+links
+
+  loadShaderSource(String filename) -> String  [private]
+    Output: Reads shader source text from data/ directory
+
+  startCompute(Grid board, int iterations) -> void
+    Output: Uploads grid state to GPU texture, begins batched computation
+
+  processBatch(int targetIterations) -> void
+    Output: Computes one batch of iterations on GPU; updates progress
+
+  stepOneGeneration(Grid board) -> void
+    Output: Runs exactly 1 Conway generation on GPU (for live simulation)
+
+  readBackToGrid(Grid board) -> void
+    Output: Reads GPU buffer pixels back into Grid's byte array
+
+  getResultBuffer() -> PGraphics
+    Output: Returns buffer1 (the GPU result image for display)
+
+
+--------------------------------------------------------------------------------
+ FILE: GPULabScreen.java  (248 lines -> GPU Compute Lab Screen)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  GPU compute lab interface. Split-pane layout:
+  - Left half: editable grid where users can draw patterns
+  - Right half: GPU computation result / progress bar / placeholder
+  - Left sidebar: circular dial for iteration count, action buttons
+
+LINKED TO:
+  - Created by: Main.java
+  - Called from: Main.draw() when appState == 3
+  - Uses: GPULabUI, GridRenderer, GPUCompute, PatternLibrary
+
+FUNCTIONS:
+
+  GPULabScreen(Main app)
+  getIterationCount() -> int
+  draw(float dt) -> void
+  handleMousePressed(float mx, float my) -> void
+  handleMouseDragged(float mx, float my) -> void
+  handleMouseReleased() -> void
+  handleKeyPressed() -> void
+  drawWithBrush() -> void  [private]
+
+
+--------------------------------------------------------------------------------
+ FILE: GPULabUI.java  (176 lines -> GPU Lab UI Configuration)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Centralized UI configuration for the GPU Lab screen.
+  All labels, colors, sizes, and layout values are editable here.
+
+LINKED TO:
+  - Created by: GPULabScreen constructor
+  - Used by: GPULabScreen
+  - Creates: CircularDial, ArrayList<DashButton>
+
+FUNCTIONS:
+
+  GPULabUI(PApplet p)
+  layoutComponents(PApplet p) -> void
+  getInputY() -> float
+  getInputWidth() -> float
+  sidebarWidth() -> int  [static]
+  topBarHeight() -> int  [static]
+
+
+--------------------------------------------------------------------------------
+ FILE: Grid.java  (~215 lines -> Core Data Model)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  The cellular automaton data model. Stores the grid state as a byte array,
+  manages double-buffering for zero-allocation updates, tracks cell ages,
+  per-generation statistics, and supports configurable rule sets.
+
+LINKED TO:
+  - Created by: Main.java (as gameBoard)
+  - Used by: All screens, GPUCompute, GridRenderer
+  - Implements: ThemeConstants (for GRID_SIZE, BIRTH_RULES, SURVIVE_RULES)
+
+FIELDS:
+  - boardFront (byte[])      : Current cell state (1=alive, 0=dead)
+  - boardBack (byte[])       : Double-buffer for next generation
+  - ageFront, ageBack (int[]): Cell age tracking
+  - rows, cols (int)         : Grid dimensions
+  - bornThisGen, diedThisGen : Per-step stats
+  - population, peakPop      : Population tracking
+  - generationNum (int)      : Total generations elapsed
+  - popHistory (int[200])    : Ring buffer for sparkline
+  - currentRuleSet (int)     : Active rule set index (0-4)
+
+FUNCTIONS:
+
+  Grid(int rows, int cols)
+  setRuleSet(int index) -> void
+  getRuleSet() -> int
+  getCellState(int row, int col) -> boolean
+  setCellState(int row, int col, boolean isAlive) -> void
+  getAge(int row, int col) -> int
+  updateToNextGeneration() -> void
+  countLiveNeighbors(int row, int col) -> int
+  clearBoard() -> void
+  recount() -> int
+
+
+--------------------------------------------------------------------------------
+ FILE: GridRenderer.java  (~131 lines -> Fast Grid Rendering)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Static utility class for rendering the grid using fast pixel-buffer
+  techniques. At 256x256 (65K cells), pixel buffer is 50x faster than
+  drawing individual rect() calls. Also renders the cached background
+  gradient and heatmap colors.
+
+LINKED TO:
+  - Used by: MenuScreen, SimulationScreen, GPULabScreen
+  - Reads from: Grid (cell states and ages)
+  - Implements: ThemeConstants (for GRID_SIZE)
+
+FUNCTIONS:
+
+  drawBackground(PApplet p) -> void  [static]
+  drawGridAdvanced(PApplet p, Grid board, int dx, int dy, int dw, int dh,
+                   float alpha, boolean heatmap) -> void  [static]
+  ageToColor(int age) -> int  [static]
+  lerpColorInt(int c1, int c2, float t) -> int  [static, private]
+
+
+--------------------------------------------------------------------------------
+ FILE: MenuScreen.java  (~94 lines -> Dashboard Menu Screen)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  The main dashboard menu screen. Shows an animated background grid with
+  a glowing title, subtitle, version badge, and three navigation buttons.
+
+LINKED TO:
+  - Created by: Main.java
+  - Called from: Main.draw() when appState == 0
+  - Uses: MenuUI, GridRenderer, PatternLibrary, ParticleSystem
+
+FUNCTIONS:
+
+  MenuScreen(Main app)
+  draw(ParticleSystem particles, float dt) -> void
+  handleMousePressed(float mx, float my) -> boolean
+
+
+--------------------------------------------------------------------------------
+ FILE: MenuUI.java  (~177 lines -> Menu UI Configuration)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Centralized UI configuration for the dashboard menu screen.
+  All visual constants are editable here.
+
+LINKED TO:
+  - Created by: MenuScreen constructor
+  - Used by: MenuScreen
+  - Creates: ArrayList<DashButton>
+  - Implements: ThemeConstants
+
+FUNCTIONS:
+
+  MenuUI(PApplet p)
+  layoutButtons(PApplet p) -> void
+
+
+--------------------------------------------------------------------------------
+ FILE: ParticleSystem.java  (114 lines -> Ambient Visual Effect)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Manages floating ambient particles on the menu screen. Creates a gentle,
+  living atmosphere with upward-drifting, fading cyan dots.
+
+LINKED TO:
+  - Created by: Main.java (80 particles)
+  - Used by: MenuScreen.draw()
+
+FUNCTIONS:
+
+  ParticleSystem(PApplet p, int count)
+  updateAndDraw(float dt) -> void
+  resetParticle(int i) -> void  [private]
+
+
+--------------------------------------------------------------------------------
+ FILE: PatternLibrary.java  (~40 lines -> Pattern Spawner)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Static utility class for spawning Game of Life patterns on the grid.
+
+LINKED TO:
+  - Used by: MenuScreen, SimulationScreen, GPULabScreen
+  - Writes to: Grid
+
+FUNCTIONS:
+
+  spawnGlider(Grid board, int midR, int midC) -> void  [static]
+  spawnGliderGun(Grid board) -> void  [static]
+  spawnRandomPattern(Grid board, PApplet p) -> void  [static]
+
+
+--------------------------------------------------------------------------------
+ FILE: SimulationRules.java  (47 lines -> Rule Definition Interface)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Defines 5 cellular automaton rule sets as lookup tables.
+
+CONSTANTS:
+  RULE_COUNT = 5
+  RULE_NAMES: "CONWAY B3/S23", "HIGHLIFE B36/S23", "DAY&NIGHT B3678/S34678",
+              "SEEDS B2/S", "DIAMOEBA B35678/S5678"
+  BIRTH_RULES (boolean[5][9])
+  SURVIVE_RULES (boolean[5][9])
+
+
+--------------------------------------------------------------------------------
+ FILE: SimulationScreen.java  (317 lines -> Interactive Simulation Screen)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  The interactive simulation screen with real-time cellular automaton.
+  Features zoom (1x to 16x), panning, analytics HUD with sparkline,
+  multiple rule sets, adjustable speed, heatmap, and pattern spawning.
+
+LINKED TO:
+  - Created by: Main.java
+  - Called from: Main.draw() when appState == 2
+  - Uses: SimulationUI, GridRenderer, PatternLibrary, Grid
+
+FUNCTIONS:
+
+  SimulationScreen(Main app)
+  draw(float dt) -> void
+  drawAnalyticsHUD() -> void  [private]
+  handleMousePressed(float mx, float my) -> void
+  handleMouseDragged(float mx, float my) -> void
+  handleMouseReleased() -> void
+  handleMouseWheel(float count) -> void
+  handleKeyPressed() -> void
+  drawWithBrush() -> void  [private]
+
+
+--------------------------------------------------------------------------------
+ FILE: SimulationUI.java  (93 lines -> Simulation UI Configuration)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Centralized UI configuration for the simulation screen's bottom bar.
+  Defines labels, colors, and layout for 9 action buttons.
+
+LINKED TO:
+  - Created by: SimulationScreen constructor
+  - Creates: ArrayList<DashButton>
+  - Implements: ThemeConstants
+
+FUNCTIONS:
+
+  SimulationUI(PApplet p)
+  layoutButtons(PApplet p) -> void
+  updateDynamicLabels(boolean isPaused, int brushSize,
+                      int ruleSet, int speedLevel) -> void
+  topBarHeight() -> int  [static]
+  bottomBarHeight() -> int  [static]
+  gridMarginX() -> int  [static]
+
+
+--------------------------------------------------------------------------------
+ FILE: ThemeConstants.java  (16 lines -> Composite Interface)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  A composite interface that extends UIColors, UILayout, and SimulationRules.
+  Any class that implements ThemeConstants gains access to all shared constants.
+
+LINKED TO:
+  - Extends: UIColors, UILayout, SimulationRules
+  - Implemented by: All major classes (Main, Grid, GPUCompute, screens, UIs, etc.)
+
+
+--------------------------------------------------------------------------------
+ FILE: UIColors.java  (19 lines -> Color Definition Interface)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Defines all shared color constants for the application's visual theme.
+
+CONSTANTS:
+  BG        = 0xFF0A0F19   Dark navy background
+  CYAN      = 0xFF00FFE0   Primary accent
+  MAGENTA   = 0xFFFF00AA   Secondary accent
+  PURPLE    = 0xFF7B61FF   Tertiary accent
+  ORANGE    = 0xFFFF9F43   GPU compute / attention
+  RED       = 0xFFFF4757   Destructive / paused
+  GREEN     = 0xFF2ED573   Play / success
+  WHITE_DIM = 0x40FFFFFF   Subtle UI elements
+
+
+--------------------------------------------------------------------------------
+ FILE: UILayout.java  (21 lines -> Layout Configuration Interface)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Defines grid size and simulation speed configuration constants.
+
+CONSTANTS:
+  GRID_SIZE = 256  (256x256 = 65,536 cells)
+  SPEED_LEVELS = {1, 2, 5, 10, 0}  (0 = MAX)
+  SPEED_NAMES = {"1x", "2x", "5x", "10x", "MAX"}
+
+
+================================================================================
+ B. SHADER FILES (data/)
+================================================================================
+
+
+--------------------------------------------------------------------------------
+ FILE: data/conway.glsl  (~145 lines -> Unified GPU Shader)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Unified GLSL fragment shader containing TWO modes selected via preprocessor:
+
+  DEFAULT (no defines):  SINGLE-STEP MODE
+    Computes 1 generation per pass. Branchless, float-only, toroidal wrapping.
+    Used by live simulation via Processing's loadShader() API.
+
+  #define MULTI_STEP_K4:  K=4 MULTI-STEP MODE
+    Computes 4 generations per pass by reading 9x9 neighborhood and cascading
+    through 7x7 -> 5x5 -> 3x3 -> center. Used by GPU Lab via raw JOGL.
+    GPUCompute prepends #define MULTI_STEP_K4 before compilation.
+
+LINKED TO:
+  - Loaded by: GPUCompute constructor (single-step via p.loadShader())
+  - Loaded by: GPUCompute.compileShaderProgram() (K=4 via loadShaderSource())
+
+UNIFORMS:
+  texture (sampler2D)  : Current generation cell state image
+  texOffset (vec2)     : Size of one pixel in UV space (1.0 / gridSize)
+
+COLOR CONVENTION:
+  Black pixel (0.0) = alive cell
+  White pixel (1.0) = dead cell
+
+SINGLE-STEP ALGORITHM:
+  1. Sample 8 neighbors using toroidal wrapping (fract())
+  2. Count alive neighbors (1.0 - red channel)
+  3. Branchless Conway rules: SURVIVE if alive + 2-3 neighbors, BIRTH if dead + 3
+  4. Output: alive -> black, dead -> white
+
+K=4 MULTI-STEP ALGORITHM:
+  Step 0: Read 9x9 neighborhood from texture (81 fetches -> g0[81])
+  Step 1: Apply Conway to 7x7 inner cells using g0 -> g1[49]
+  Step 2: Apply Conway to 5x5 inner cells using g1 -> g2[25]
+  Step 3: Apply Conway to 3x3 inner cells using g2 -> g3[9]
+  Step 4: Apply Conway to center cell using g3 -> result
+
+HELPER FUNCTION (K=4 mode only):
+  conway(float cell, float neighbors) -> float
+    Input:  Cell state (0=dead, 1=alive) and neighbor count
+    Output: Next-gen state using branchless step()/max() rules
+
+
+================================================================================
+ C. BUILD & CONFIG FILES
+================================================================================
+
+
+--------------------------------------------------------------------------------
+ FILE: run.bat  (45 lines -> Build & Launch Script)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  One-click Windows batch script to compile, build the JAR, and launch.
+
+STEPS:
+  1. Set JAVA_HOME to C:\Program Files\Apache NetBeans\jdk
+  2. Compile all .java files with javac (--release 17, classpath: dist/lib/*.jar)
+  3. Copy data files (shaders) to dist/data/
+  4. Generate MANIFEST.MF and build JAR
+  5. Launch with java -jar and necessary JVM flags for JOGL compatibility
+
+
+--------------------------------------------------------------------------------
+ FILE: .vscode/settings.json  (16 lines -> VS Code Project Settings)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Configures VS Code's Java extension:
+  - Referenced libraries: all 7 JARs from dist/lib/
+  - Source path: src/game/of/life/on/gpu
+  - Output path: build/classes
+
+
+--------------------------------------------------------------------------------
+ FILE: .vscode/tasks.json  (29 lines -> VS Code Build Tasks)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Defines 3 VS Code tasks that chain together:
+  1. "Compile Java" - runs javac on all .java files
+  2. "Build JAR" - creates the JAR with proper manifest (depends on Compile)
+  3. "Run Game" - launches the JAR with JOGL JVM flags (depends on Build JAR)
+
+
+--------------------------------------------------------------------------------
+ FILES: dist/lib/*.jar  (7 files -> Runtime Dependencies)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Third-party libraries required at compile time and runtime:
+
+  core-4.5.2.jar                           - Processing 4 core library
+  jogl-all-2.6.0.jar                       - JOGL: Java OpenGL bindings
+  jogl-all-2.6.0-natives-windows-amd64.jar - JOGL native DLLs for Windows x64
+  jogl-all-main-2.6.0.jar                  - JOGL module descriptor
+  gluegen-rt-2.6.0.jar                     - GlueGen runtime (JOGL dependency)
+  gluegen-rt-2.6.0-natives-windows-amd64.jar - GlueGen native DLLs
+  gluegen-rt-main-2.6.0.jar               - GlueGen module descriptor
+
+
+================================================================================
+ 6. CLASS DEPENDENCY GRAPH
+================================================================================
+
+  Main ---+---> Grid <-----------------------------------+
+          +---> GPUCompute ---> Grid, conway.glsl        |
+          +---> ParticleSystem                           |
+          +---> MenuScreen ---> MenuUI ---> DashButton   |
+          |                     GridRenderer ---> Grid    |
+          |                     PatternLibrary ---> Grid -+
+          +---> BackgroundScreen
+          +---> SimulationScreen ---> SimulationUI ---> DashButton
+          |                          GridRenderer
+          |                          PatternLibrary
+          +---> GPULabScreen ---> GPULabUI ---> CircularDial
+                                  GridRenderer    DashButton
+                                  GPUCompute
+                                  PatternLibrary
+
+  Interface hierarchy:
+    ThemeConstants = UIColors + UILayout + SimulationRules
+    (Implemented by: Main, Grid, GPUCompute, GridRenderer,
+     MenuScreen, MenuUI, SimulationScreen, SimulationUI,
+     GPULabScreen, GPULabUI, ParticleSystem, PatternLibrary)
+
+
+================================================================================
+ END OF DOCUMENTATION
+================================================================================

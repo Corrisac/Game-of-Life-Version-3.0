@@ -120,21 +120,7 @@ public class MenuUI implements ThemeConstants {
     // Vertical offset of the status bar from the bottom edge
     public static final float STATUS_BAR_BOTTOM_OFFSET = 18;
 
-    // ═══════════════════════════════════════════════════════
-    //                  DIAL CONFIG (editable)
-    // ═══════════════════════════════════════════════════════
 
-    // The cosmetic dial label shown on the menu
-    public static final String DIAL_LABEL = "ENERGY";
-
-    // Maximum value the dial can display
-    public static final int DIAL_MAX_VALUE = 100;
-
-    // Initial dial radius in pixels
-    public static final float DIAL_RADIUS = 120;
-
-    // Default dial value (cosmetic display, 0–100)
-    public static final int DIAL_INITIAL_VALUE = 73;
 
     // ═══════════════════════════════════════════════════════
     //                  BACKGROUND ANIMATION (editable)
@@ -153,9 +139,6 @@ public class MenuUI implements ThemeConstants {
     //                  COMPONENT INSTANCES
     // ═══════════════════════════════════════════════════════
 
-    // The decorative circular dial widget
-    CircularDial dial;
-
     // The list of navigation buttons
     ArrayList<DashButton> buttons;
 
@@ -164,12 +147,6 @@ public class MenuUI implements ThemeConstants {
      * @param p  Processing applet for component initialization
      */
     public MenuUI(PApplet p) {
-        // V5.0: Scale dial radius by DPI factor
-        float scaledDialR = DIAL_RADIUS * uiScale;
-        dial = new CircularDial(p, p.width / 2f, p.height * TITLE_Y_RATIO,
-                                scaledDialR, DIAL_MAX_VALUE, DIAL_LABEL);
-        dial.setValue(DIAL_INITIAL_VALUE);
-
         // Create all navigation buttons from the configured labels and colors
         buttons = new ArrayList<>();
         for (int i = 0; i < BUTTON_LABELS.length; i++) {

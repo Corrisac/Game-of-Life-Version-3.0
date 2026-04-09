@@ -1,82 +1,104 @@
-// ============================================================================
-//  CONWAY'S GAME OF LIFE — V2.0 GPU SHADER
-// ============================================================================
-//  Optimized GLSL fragment shader for massively parallel cellular automaton.
-//
-//  V2.0 IMPROVEMENTS OVER V1.0:
-//    1. BRANCHLESS — No if/else. Uses step()/max() so all GPU threads take the
-//       same code path. Eliminates SIMD thread divergence entirely.
-//    2. FLOAT-ONLY — No int() casts. Pure floating-point arithmetic is native
-//       to GPU hardware and avoids costly format conversions.
-//    3. TOROIDAL WRAPPING — Edges wrap around using fract(). A glider leaving
-//       the right side reappears on the left. Correct Game of Life behavior.
-//    4. COMPACT — 40% fewer lines than V1.0 with identical output.
-// ============================================================================
-
 #ifdef GL_ES
 precision mediump float;
 precision mediump int;
 #endif
 
-// Processing automatically passes these uniforms to the shader:
-uniform sampler2D texture;  // The current generation's cell state image
-uniform vec2 texOffset;     // Size of one pixel in UV space (1.0 / gridSize)
+uniform sampler2D texture;
+uniform vec2 texOffset;
 
-// Varyings passed from the vertex shader:
 varying vec4 vertColor;
 varying vec4 vertTexCoord;
 
+
+#ifdef MULTI_STEP_K4
+
+float conway(float cell, float neighbors) {
+    float survive = cell * step(2.0, neighbors) * step(neighbors, 3.0);
+    float birth   = (1.0 - cell) * step(3.0, neighbors) * step(neighbors, 3.0);
+    return max(survive, birth);
+}
+
 void main() {
-    // Current pixel's UV coordinate (0.0 to 1.0)
     vec2 uv = vertTexCoord.st;
+    float dx = texOffset.x;
+    float dy = texOffset.y;
 
-    // Pre-compute the pixel step size for neighbor lookups
-    float dx = texOffset.x;   // Horizontal step = 1.0 / width
-    float dy = texOffset.y;   // Vertical step   = 1.0 / height
+    float g0[81];
+    for (int row = -4; row <= 4; row++) {
+        for (int col = -4; col <= 4; col++) {
+            vec2 offset = vec2(float(col) * dx, float(row) * dy);
+            float texVal = texture2D(texture, fract(uv + offset)).r;
+            g0[(row + 4) * 9 + (col + 4)] = 1.0 - texVal;
+        }
+    }
 
-    // ── NEIGHBOR SAMPLING (toroidal wrap via fract) ──────────────────────
-    // fract() wraps coordinates: -0.01 → 0.99, 1.01 → 0.01
-    // This gives us correct toroidal (pacman) wrapping at all edges.
-    //
-    // Color convention: black (0.0) = alive, white (1.0) = dead
-    // So (1.0 - red channel) gives: 1.0 for alive, 0.0 for dead
-    //
-    // Sum all 8 neighbors in pure float — no int casts needed:
+    float g1[49];
+    for (int r = 1; r <= 7; r++) {
+        for (int c = 1; c <= 7; c++) {
+            float cell = g0[r * 9 + c];
+            float n = g0[(r-1)*9+(c-1)] + g0[(r-1)*9+c] + g0[(r-1)*9+(c+1)]
+                    + g0[ r   *9+(c-1)]                  + g0[ r   *9+(c+1)]
+                    + g0[(r+1)*9+(c-1)] + g0[(r+1)*9+c] + g0[(r+1)*9+(c+1)];
+            g1[(r - 1) * 7 + (c - 1)] = conway(cell, n);
+        }
+    }
+
+    float g2[25];
+    for (int r = 1; r <= 5; r++) {
+        for (int c = 1; c <= 5; c++) {
+            float cell = g1[r * 7 + c];
+            float n = g1[(r-1)*7+(c-1)] + g1[(r-1)*7+c] + g1[(r-1)*7+(c+1)]
+                    + g1[ r   *7+(c-1)]                  + g1[ r   *7+(c+1)]
+                    + g1[(r+1)*7+(c-1)] + g1[(r+1)*7+c] + g1[(r+1)*7+(c+1)];
+            g2[(r - 1) * 5 + (c - 1)] = conway(cell, n);
+        }
+    }
+
+    float g3[9];
+    for (int r = 1; r <= 3; r++) {
+        for (int c = 1; c <= 3; c++) {
+            float cell = g2[r * 5 + c];
+            float n = g2[(r-1)*5+(c-1)] + g2[(r-1)*5+c] + g2[(r-1)*5+(c+1)]
+                    + g2[ r   *5+(c-1)]                  + g2[ r   *5+(c+1)]
+                    + g2[(r+1)*5+(c-1)] + g2[(r+1)*5+c] + g2[(r+1)*5+(c+1)];
+            g3[(r - 1) * 3 + (c - 1)] = conway(cell, n);
+        }
+    }
+
+    float centerCell = g3[4];
+    float neighbors  = g3[0] + g3[1] + g3[2]
+                      + g3[3]          + g3[5]
+                      + g3[6] + g3[7] + g3[8];
+    float result = conway(centerCell, neighbors);
+
+    gl_FragColor = vec4(vec3(1.0 - result), 1.0);
+}
+
+
+#else
+
+void main() {
+    vec2 uv = vertTexCoord.st;
+    float dx = texOffset.x;
+    float dy = texOffset.y;
+
     float n = 0.0;
-    n += 1.0 - texture2D(texture, fract(uv + vec2(-dx, -dy))).r;  // top-left
-    n += 1.0 - texture2D(texture, fract(uv + vec2(0.0, -dy))).r;  // top
-    n += 1.0 - texture2D(texture, fract(uv + vec2( dx, -dy))).r;  // top-right
-    n += 1.0 - texture2D(texture, fract(uv + vec2(-dx, 0.0))).r;  // left
-    n += 1.0 - texture2D(texture, fract(uv + vec2( dx, 0.0))).r;  // right
-    n += 1.0 - texture2D(texture, fract(uv + vec2(-dx,  dy))).r;  // bottom-left
-    n += 1.0 - texture2D(texture, fract(uv + vec2(0.0,  dy))).r;  // bottom
-    n += 1.0 - texture2D(texture, fract(uv + vec2( dx,  dy))).r;  // bottom-right
+    n += 1.0 - texture2D(texture, fract(uv + vec2(-dx, -dy))).r;
+    n += 1.0 - texture2D(texture, fract(uv + vec2(0.0, -dy))).r;
+    n += 1.0 - texture2D(texture, fract(uv + vec2( dx, -dy))).r;
+    n += 1.0 - texture2D(texture, fract(uv + vec2(-dx, 0.0))).r;
+    n += 1.0 - texture2D(texture, fract(uv + vec2( dx, 0.0))).r;
+    n += 1.0 - texture2D(texture, fract(uv + vec2(-dx,  dy))).r;
+    n += 1.0 - texture2D(texture, fract(uv + vec2(0.0,  dy))).r;
+    n += 1.0 - texture2D(texture, fract(uv + vec2( dx,  dy))).r;
 
-    // ── CURRENT CELL STATE ───────────────────────────────────────────────
-    float cell = 1.0 - texture2D(texture, uv).r;  // 1.0 = alive, 0.0 = dead
+    float cell = 1.0 - texture2D(texture, uv).r;
 
-    // ── CONWAY'S RULES (branchless) ──────────────────────────────────────
-    //
-    // The 4 rules collapsed into two branchless expressions:
-    //
-    //   SURVIVE:  cell is alive AND neighbors ∈ {2, 3}
-    //     → cell * step(2.0, n) * step(n, 3.0)
-    //     step(2.0, n) = 1.0 when n >= 2.0, else 0.0
-    //     step(n, 3.0) = 1.0 when n <= 3.0, else 0.0
-    //     Both must be 1.0, AND cell must be 1.0 (alive)
-    //
-    //   BIRTH:    cell is dead AND neighbors == 3
-    //     → (1.0 - cell) * step(3.0, n) * step(n, 3.0)
-    //     step(3.0, n) = 1.0 when n >= 3.0
-    //     step(n, 3.0) = 1.0 when n <= 3.0
-    //     Combined: only true when n is exactly 3.0
-    //     (1.0 - cell) ensures cell must be dead
-    //
     float survive = cell * step(2.0, n) * step(n, 3.0);
     float birth   = (1.0 - cell) * step(3.0, n) * step(n, 3.0);
-    float next    = max(survive, birth);  // 1.0 = alive next gen, 0.0 = dead
+    float next    = max(survive, birth);
 
-    // ── OUTPUT ───────────────────────────────────────────────────────────
-    // Convert back to color: alive (1.0) → black (0.0), dead (0.0) → white (1.0)
     gl_FragColor = vec4(vec3(1.0 - next), 1.0);
 }
+
+#endif

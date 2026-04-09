@@ -214,14 +214,4 @@ public class Grid implements ThemeConstants {
         return n;
     }
 
-    /** Legacy draw method — kept for compatibility. */
-    public void draw(PApplet window, int cellSize) {
-        for (int r = 0; r < rows; r++) {
-            for (int c = 0; c < cols; c++) {
-                window.fill(boardFront[r * cols + c] != 0 ? 0 : 255);
-                window.stroke(150);
-                window.rect(c * cellSize, r * cellSize, cellSize, cellSize);
-            }
-        }
-    }
 }

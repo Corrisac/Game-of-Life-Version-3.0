@@ -17,15 +17,4 @@ public interface UIColors {
     int GREEN   = 0xFF2ED573;   // Play / success
     int WHITE_DIM = 0x40FFFFFF; // Subtle UI elements
 
-    // ═══════════════════════════════════════════════════════
-    //        HEATMAP GRADIENT COLORS
-    // ═══════════════════════════════════════════════════════
-
-    // Cell-age gradient: cold → warm → hot → white
-    int HEAT_COLD   = 0xFF1E90FF;  // Age 1-3:   dodger blue (just born)
-    int HEAT_COOL   = 0xFF00FFE0;  // Age 4-8:   cyan
-    int HEAT_WARM   = 0xFFFF00AA;  // Age 9-20:  magenta
-    int HEAT_HOT    = 0xFFFF4757;  // Age 21-50: red
-    int HEAT_WHITE  = 0xFFFFFFFF;  // Age 50+:   white (ancient)
-    int HEAT_FLASH  = 0xFF00FFFF;  // Just-born flash color
 }

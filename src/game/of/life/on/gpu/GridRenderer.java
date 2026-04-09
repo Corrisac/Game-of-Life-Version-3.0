@@ -44,13 +44,7 @@ public class GridRenderer implements ThemeConstants {
         bgCache.endDraw();
     }
 
-    /**
-     * V4.0: Fast grid rendering using pixel buffer.
-     * Renders the entire grid to a PGraphics, then displays it scaled.
-     */
-    public static void drawGrid(PApplet p, Grid board, int cs, int ox, int oy, float alpha) {
-        drawGridAdvanced(p, board, ox, oy, cs * GRID_SIZE, cs * GRID_SIZE, alpha, false);
-    }
+
 
     /**
      * V4.0: Advanced grid rendering with heatmap support.
@@ -108,8 +102,7 @@ public class GridRenderer implements ThemeConstants {
         if (alpha < 0.99f) p.noTint();
     }
 
-    /** Returns the internal pixel buffer for minimap/direct use. */
-    public static PGraphics getGridBuffer() { return gridBuf; }
+
 
     /** Maps cell age to a heatmap color gradient. */
     public static int ageToColor(int age) {
@@ -131,26 +124,4 @@ public class GridRenderer implements ThemeConstants {
         return (a << 24) | (r << 16) | (g << 8) | b;
     }
 
-    /** Draws decorative L-shaped brackets in each window corner. */
-    public static void drawCornerAccents(PApplet p) {
-        p.stroke(0, 255, 224, 40);
-        p.strokeWeight(1);
-        int s = 30;
-        p.line(10, 10, 10 + s, 10); p.line(10, 10, 10, 10 + s);
-        p.line(p.width - 10, 10, p.width - 10 - s, 10);
-        p.line(p.width - 10, 10, p.width - 10, 10 + s);
-        p.line(10, p.height - 10, 10 + s, p.height - 10);
-        p.line(10, p.height - 10, 10, p.height - 10 - s);
-        p.line(p.width-10, p.height-10, p.width-10-s, p.height-10);
-        p.line(p.width-10, p.height-10, p.width-10, p.height-10-s);
-    }
-
-    /** Counts all alive cells on the grid. */
-    public static int countAlive(Grid board) {
-        int n = 0;
-        for (int r = 0; r < GRID_SIZE; r++)
-            for (int c = 0; c < GRID_SIZE; c++)
-                if (board.getCellState(r, c)) n++;
-        return n;
-    }
 }

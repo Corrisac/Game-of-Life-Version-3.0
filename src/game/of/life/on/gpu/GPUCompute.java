@@ -17,8 +17,8 @@ import java.nio.IntBuffer;         // Int buffer for GL object handles (textures
  * GPUCompute V3.0 — Raw JOGL compute loop + K=4 multi-step shader.
  *
  * V3.0 IMPROVEMENTS OVER V2.0:
- *   1. MULTI-STEP SHADER (K=4) — conway4.glsl computes 4 generations per
- *      fragment pass. Cuts render passes by 4×.
+ *   1. MULTI-STEP SHADER (K=4) — conway.glsl (MULTI_STEP_K4 mode) computes
+ *      4 generations per fragment pass. Cuts render passes by 4×.
  *   2. RAW JOGL LOOP — Bypasses Processing's beginDraw/endDraw overhead.
  *      Uses direct GL calls: 3 per pass instead of ~25. Combined with K=4,
  *      reduces total GL overhead from 25M to 750K for 1M iterations (33× less).
@@ -26,15 +26,14 @@ import java.nio.IntBuffer;         // Int buffer for GL object handles (textures
  *      via glTexSubImage2D, bypassing Processing's pixel[] copy.
  *
  * ARCHITECTURE:
- *   - Live simulation (stepOneGeneration): Uses Processing API + conway.glsl
- *     (unchanged from V2.0 — only 1 step/frame, no performance issue).
- *   - GPU Lab bulk compute (startCompute/processBatch): Uses raw JOGL +
- *     conway4.glsl for maximum throughput.
+ *   - Both paths use the unified conway.glsl shader file:
+ *     · Live simulation: Processing loads conway.glsl as-is (single-step mode)
+ *     · GPU Lab bulk: Raw JOGL prepends #define MULTI_STEP_K4 (K=4 mode)
  *
  * RAW GL RESOURCES (created once in initRawGL):
  *   - 2 GL textures (rawTex[0], rawTex[1]) for ping-pong
  *   - 2 GL framebuffers (rawFbo[0], rawFbo[1]) attached to those textures
- *   - 1 compiled GL program (rawProgram) from conway4.glsl
+ *   - 1 compiled GL program (rawProgram) from conway.glsl (K=4 mode)
  *   - 1 fullscreen quad VBO (quadVBO)
  */
 public class GPUCompute implements ThemeConstants {
@@ -56,7 +55,7 @@ public class GPUCompute implements ThemeConstants {
     private boolean rawGLReady = false;   // True once initRawGL() has successfully completed
     private int[] rawTex = new int[2];    // Two raw GL texture handles for ping-pong
     private int[] rawFbo = new int[2];    // Two raw GL framebuffer handles for ping-pong
-    private int rawProgram;               // Compiled GL shader program (conway4.glsl)
+    private int rawProgram;               // Compiled GL shader program (conway.glsl K=4 mode)
     private int quadVBO;                  // Vertex buffer object for the fullscreen quad
     private int rawPingPong = 0;          // Current ping-pong index (0 or 1)
     private int uTexture;                 // Uniform location for 'texture' sampler
@@ -93,7 +92,7 @@ public class GPUCompute implements ThemeConstants {
     /**
      * V3.0: Initializes raw JOGL resources — called once on first compute.
      * Extracts the GL2ES2 context from Processing, creates textures, FBOs,
-     * compiles conway4.glsl as a raw GL program, and sets up the quad VBO.
+     * compiles conway.glsl (K=4 mode) as a raw GL program, and sets up the quad VBO.
      */
     private void initRawGL() {
         if (rawGLReady) return;  // Already initialized
@@ -134,7 +133,7 @@ public class GPUCompute implements ThemeConstants {
         }
         gl.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0);         // Unbind FBO
 
-        // ── Compile conway4.glsl as a raw GL program ────────────────────
+        // ── Compile conway.glsl (K=4 mode) as a raw GL program ─────────
         rawProgram = compileShaderProgram(gl);
         if (rawProgram == 0) {
             System.err.println("[GPU V3] Shader compilation failed! Falling back to V2 path.");
@@ -179,8 +178,9 @@ public class GPUCompute implements ThemeConstants {
     }
 
     /**
-     * Compiles conway4.glsl vertex+fragment shaders into a linked GL program.
+     * Compiles conway.glsl (K=4 mode) vertex+fragment shaders into a linked GL program.
      * Uses a minimal pass-through vertex shader that forwards position and UVs.
+     * Prepends #define MULTI_STEP_K4 to activate the multi-step shader branch.
      */
     private int compileShaderProgram(GL2ES2 gl) {
         // ── Minimal vertex shader ───────────────────────────────────────
@@ -198,12 +198,14 @@ public class GPUCompute implements ThemeConstants {
             "  vertColor = vec4(1.0);\n" +
             "}\n";
 
-        // ── Load fragment shader source from file ───────────────────────
-        String fragSrc = loadShaderSource("conway4.glsl");
+        // ── Load fragment shader source and activate K=4 mode ───────────
+        String fragSrc = loadShaderSource("conway.glsl");
         if (fragSrc == null) {
-            System.err.println("[GPU V3] Could not load conway4.glsl!");
+            System.err.println("[GPU V3] Could not load conway.glsl!");
             return 0;
         }
+        // Prepend #define to select the K=4 multi-step branch
+        fragSrc = "#define MULTI_STEP_K4\n" + fragSrc;
 
         // ── Compile vertex shader ───────────────────────────────────────
         int vs = gl.glCreateShader(GL2ES2.GL_VERTEX_SHADER);
