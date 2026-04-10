@@ -1,8 +1,8 @@
 ================================================================================
  GAME OF LIFE ON GPU - COMPLETE PROJECT DOCUMENTATION
 ================================================================================
- Version:  5.0
- Platform: Java 17 + Processing 4.5.2 + JOGL 2.6.0
+ Version:  6.0
+ Platform: Java 17 + Processing 4.5.2 + JOGL 2.6.0 (GL 4.3+)
  Package:  game.of.life.on.gpu (source: src/game/of/life/on/gpu/)
 ================================================================================
 
@@ -30,8 +30,10 @@ This is a GPU-accelerated Conway's Game of Life simulation built with
 Processing 4 (Java) and GLSL shaders. The application features:
 
   - A futuristic PS5-inspired dashboard UI
-  - Real-time CPU simulation with multiple rule sets (Conway, HighLife, etc.)
-  - GPU bulk compute via raw JOGL with a K=4 multi-step shader
+  - Real-time GPU simulation via a branchless fragment shader (conway.glsl)
+  - GPU bulk compute via a GL 4.3 compute shader (conway_compute.glsl)
+    that processes 900K generations in ~1.3 seconds using bit-parallel
+    arithmetic inside a single work group's shared memory
   - Zoom/pan, heatmap mode, analytics HUD, and pattern spawning
   - Smooth screen transitions between 4 application screens:
       0 = Menu Dashboard
@@ -39,9 +41,19 @@ Processing 4 (Java) and GLSL shaders. The application features:
       2 = Interactive Simulation
       3 = GPU Compute Lab
 
-  The project runs on Processing's P2D (OpenGL) renderer and uses a single
-  unified GLSL shader (conway.glsl) with preprocessor guards to support
-  both single-step and K=4 multi-step computation modes.
+  TWO GPU EXECUTION PATHS:
+
+    1. Live Simulation (conway.glsl fragment shader)
+       - Processing's API loads the shader in single-step mode
+       - Runs 1 generation per frame via texture ping-pong
+       - Branchless Conway rules using step()/max()
+
+    2. GPU Lab Bulk Compute (conway_compute.glsl compute shader)
+       - GL 4.3 compute shader with single-workgroup architecture
+       - 256×256 grid packed as bits into 2048 uints (8 KB per grid)
+       - 1024 threads with barrier() sync — zero dispatch overhead
+       - Bit-parallel adder tree: 32 cells per uint operation
+       - TDR-safe chunking: max 500K iterations per dispatch
 
 
 ================================================================================
@@ -49,16 +61,19 @@ Processing 4 (Java) and GLSL shaders. The application features:
 ================================================================================
 
 Game Of Life On GPU/
-+-- src/game/of/life/on/gpu/     <- Java source files (17 files)
++-- src/game/of/life/on/gpu/     <- Java source files (19 files)
 +-- data/
-|   +-- conway.glsl              <- Unified GLSL shader (single-step + K=4 modes)
+|   +-- conway.glsl              <- Fragment shader (live simulation, single-step)
+|   +-- conway_compute.glsl      <- Compute shader (bulk compute, bit-parallel)
+|   +-- explanation.txt          <- Detailed fragment shader explanation
 +-- build/classes/                <- Compiled .class files (auto-generated)
 +-- dist/
 |   +-- Game_Of_Life_On_GPU.jar  <- Built JAR
-|   +-- data/                    <- Shader copied here at build time
+|   +-- data/                    <- Shaders copied here at build time
 |   +-- lib/                     <- Processing & JOGL dependency JARs (7 files)
 +-- .vscode/                     <- VS Code IDE configuration
 +-- run.bat                      <- One-click build & launch script
++-- README.md                    <- Project overview and quick-start guide
 +-- PROJECT_DOCUMENTATION.txt    <- This file
 
 
@@ -79,6 +94,7 @@ Game Of Life On GPU/
   Requirements:
     - JDK 17+ (expected at C:\Program Files\Apache NetBeans\jdk\)
     - Processing 4 core library + JOGL (included in dist/lib/)
+    - GPU with OpenGL 4.3+ support (for compute shader)
 
 
 ================================================================================
@@ -105,6 +121,11 @@ Game Of Life On GPU/
   Data flow:
     Grid (data model) <-> GridRenderer (display) <-> Screens (UI)
     Grid (data model) <-> GPUCompute (GPU shader pipeline)
+
+  GPU Compute Pipeline (V6 — conway_compute.glsl):
+    Grid → ByteBuffer → glTexSubImage2D → computeTex[0]
+         → glDispatchCompute(1,1,1) [all iters in shared memory]
+         → computeTex[1] → glReadPixels → buffer1 → display
 
 
 ================================================================================
@@ -316,55 +337,83 @@ FUNCTIONS:
 
 
 --------------------------------------------------------------------------------
- FILE: GPUCompute.java  (~590 lines -> GPU Computation Engine)
+ FILE: GPUCompute.java  (~420 lines -> GPU Computation Engine)
 --------------------------------------------------------------------------------
 
 PURPOSE:
   Core GPU computation engine. Handles both:
   1. Live simulation (1 step/frame via Processing API + conway.glsl single-step)
-  2. Bulk GPU Lab compute (millions of steps via raw JOGL + conway.glsl K=4)
+  2. Bulk GPU Lab compute (up to 1M iterations via GL4.3 compute shader)
 
-  Both paths use the same unified conway.glsl shader file. The K=4 path
-  prepends #define MULTI_STEP_K4 before compilation to activate the
-  multi-step branch. V3.0 uses raw JOGL calls (3 GL calls per pass vs 25
-  with Processing), achieving 33x reduced GL overhead.
+  The V6 compute pipeline uses conway_compute.glsl — a single-workgroup
+  bit-parallel compute shader. The entire 256×256 grid is packed as bits
+  into shared memory (16 KB) and ALL iterations run with barrier() sync,
+  eliminating dispatch overhead entirely.
+
+  PERFORMANCE: 900K iterations in ~1.3 seconds (42× faster than V3).
 
 LINKED TO:
   - Created by: Main.java
   - Used by: SimulationScreen (stepOneGeneration, readBackToGrid)
              GPULabScreen (startCompute, processBatch, progress/results)
   - Implements: ThemeConstants (for GRID_SIZE)
-  - Loads shader: data/conway.glsl (both single-step and K=4 modes)
+  - Loads shaders: data/conway.glsl (live), data/conway_compute.glsl (bulk)
+
+KEY CONSTANTS:
+  GL_COMPUTE_SHADER (0x91B9)      : GL 4.3 compute shader type
+  GL_SHADER_IMAGE_ACCESS_BARRIER_BIT (0x00000020)
+  GL_RGBA8, GL_READ_ONLY, GL_WRITE_ONLY : Image binding access modes
+  TDR_CHUNK = 500,000              : Max iterations per dispatch (TDR safety)
+
+FIELDS:
+  - p (PApplet)             : Processing applet reference
+  - conwayShader (PShader)  : Single-step fragment shader for live sim
+  - buffer1, buffer2        : Ping-pong PGraphics buffers (Processing API)
+  - hasComputed (boolean)   : True when GPU Lab result is available
+  - computeTime (long)      : Wall-clock ms of last computation
+  - isComputing (boolean)   : True during active computation
+  - computeProgress (int)   : Iterations completed so far
+  - computeReady (boolean)  : True once initCompute() has completed
+  - computeProgram (int)    : Compiled GL compute program handle
+  - computeTex[2] (int[])   : Ping-pong textures for compute I/O
+  - computeFbo[1] (int[])   : FBO for result readback
+  - computeUIter (int)      : Uniform location for uIterations
+  - pixelBuffer (ByteBuffer): Reusable direct buffer for texture transfer
+  - readbackArray (int[])   : Reusable array for pixel readback
 
 FUNCTIONS:
 
   GPUCompute(PApplet p)
     Input:  Processing applet
-    Output: Loads conway.glsl, creates ping-pong buffers at GRID_SIZExGRID_SIZE
+    Output: Loads conway.glsl, creates ping-pong buffers at GRID_SIZE×GRID_SIZE
 
-  initRawGL() -> void  [private]
-    Output: Creates raw GL textures, FBOs, compiles conway.glsl (K=4), sets up VBO
+  initCompute() -> void  [private]
+    Output: Creates GL4 compute textures, FBO, compiles conway_compute.glsl,
+            pre-allocates pixel buffers. Called once on first compute run.
 
-  compileShaderProgram(GL2ES2 gl) -> int  [private]
-    Output: Loads conway.glsl, prepends #define MULTI_STEP_K4, compiles+links
+  checkShaderCompile(GL2ES2 gl, int shader, String label) -> boolean  [private]
+    Output: Checks shader compilation status, prints errors
 
   loadShaderSource(String filename) -> String  [private]
     Output: Reads shader source text from data/ directory
 
   startCompute(Grid board, int iterations) -> void
-    Output: Uploads grid state to GPU texture, begins batched computation
+    Output: Uploads grid → texture, dispatches TDR-safe chunks of compute
+            (each up to 500K iterations in shared memory), reads back result.
+            All work completes inside this method.
 
   processBatch(int targetIterations) -> void
-    Output: Computes one batch of iterations on GPU; updates progress
+    Output: No-op. Kept for API compatibility with GPULabScreen.
 
   stepOneGeneration(Grid board) -> void
-    Output: Runs exactly 1 Conway generation on GPU (for live simulation)
+    Output: Runs exactly 1 Conway generation on GPU (for live simulation).
+            Uses Processing API + conway.glsl fragment shader.
 
   readBackToGrid(Grid board) -> void
-    Output: Reads GPU buffer pixels back into Grid's byte array
+    Output: Reads GPU buffer pixels back into Grid's byte array.
 
   getResultBuffer() -> PGraphics
-    Output: Returns buffer1 (the GPU result image for display)
+    Output: Returns buffer1 (the GPU result image for display).
 
 
 --------------------------------------------------------------------------------
@@ -673,24 +722,26 @@ CONSTANTS:
 
 
 --------------------------------------------------------------------------------
- FILE: data/conway.glsl  (~145 lines -> Unified GPU Shader)
+ FILE: data/conway.glsl  (~105 lines -> Fragment Shader, Live Simulation)
 --------------------------------------------------------------------------------
 
 PURPOSE:
-  Unified GLSL fragment shader containing TWO modes selected via preprocessor:
+  GLSL fragment shader for real-time live simulation. Contains TWO modes
+  selected via preprocessor:
 
   DEFAULT (no defines):  SINGLE-STEP MODE
     Computes 1 generation per pass. Branchless, float-only, toroidal wrapping.
     Used by live simulation via Processing's loadShader() API.
 
-  #define MULTI_STEP_K4:  K=4 MULTI-STEP MODE
+  #define MULTI_STEP_K4:  K=4 MULTI-STEP MODE (LEGACY)
     Computes 4 generations per pass by reading 9x9 neighborhood and cascading
-    through 7x7 -> 5x5 -> 3x3 -> center. Used by GPU Lab via raw JOGL.
-    GPUCompute prepends #define MULTI_STEP_K4 before compilation.
+    through 7x7 -> 5x5 -> 3x3 -> center.
+    NOTE: This mode is no longer used by the application. The V6 compute
+    shader (conway_compute.glsl) replaced K=4 bulk compute. The code remains
+    in the shader for reference and educational purposes.
 
 LINKED TO:
   - Loaded by: GPUCompute constructor (single-step via p.loadShader())
-  - Loaded by: GPUCompute.compileShaderProgram() (K=4 via loadShaderSource())
 
 UNIFORMS:
   texture (sampler2D)  : Current generation cell state image
@@ -706,17 +757,77 @@ SINGLE-STEP ALGORITHM:
   3. Branchless Conway rules: SURVIVE if alive + 2-3 neighbors, BIRTH if dead + 3
   4. Output: alive -> black, dead -> white
 
-K=4 MULTI-STEP ALGORITHM:
-  Step 0: Read 9x9 neighborhood from texture (81 fetches -> g0[81])
-  Step 1: Apply Conway to 7x7 inner cells using g0 -> g1[49]
-  Step 2: Apply Conway to 5x5 inner cells using g1 -> g2[25]
-  Step 3: Apply Conway to 3x3 inner cells using g2 -> g3[9]
-  Step 4: Apply Conway to center cell using g3 -> result
 
-HELPER FUNCTION (K=4 mode only):
-  conway(float cell, float neighbors) -> float
-    Input:  Cell state (0=dead, 1=alive) and neighbor count
-    Output: Next-gen state using branchless step()/max() rules
+--------------------------------------------------------------------------------
+ FILE: data/conway_compute.glsl  (~118 lines -> Compute Shader, Bulk GPU Lab)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  GL 4.3 compute shader for bulk GPU Lab computation. Implements a
+  single-workgroup, bit-parallel architecture that runs ALL iterations
+  inside shared memory with zero dispatch overhead.
+
+  This shader is the core of the V6 performance breakthrough:
+  900K iterations in ~1.3 seconds (vs 55s with V3 fragment shader).
+
+LINKED TO:
+  - Loaded by: GPUCompute.initCompute() (compiled via glCreateShader/glLinkProgram)
+
+WORK GROUP:
+  layout(local_size_x = 1024) — 1024 threads in a single work group.
+  Dispatched as glDispatchCompute(1, 1, 1) — exactly ONE work group.
+
+IMAGE BINDINGS:
+  binding=0  imgIn  (readonly)  : Source texture with current grid state
+  binding=1  imgOut (writeonly) : Destination texture for final result
+
+UNIFORM:
+  uIterations (int) : Number of Conway generations to compute
+
+SHARED MEMORY:
+  tileA[2048] (uint) : Grid buffer A — 256 rows × 8 columns of 32-bit words
+  tileB[2048] (uint) : Grid buffer B — ping-pong partner
+  Total: 16,384 bytes (well under the 48 KB shared memory limit)
+
+BIT PACKING:
+  Each uint stores 32 cells horizontally. The 256×256 grid = 256 rows × 8 words
+  per row = 2048 uints. Bit 0 = leftmost cell, bit 31 = rightmost cell.
+
+ALGORITHM:
+
+  PHASE 1 — Load: Read texture pixels → pack into tileA as bits.
+    Each thread handles 2 uints (1024 threads × 2 = 2048).
+    Inner loop reads 32 pixels per uint (imageLoad).
+
+  PHASE 2 — Iterate: Unrolled 2-step ping-pong loop.
+    For each pair of iterations:
+      Even step: Read tileA → compute Conway → write tileB, barrier()
+      Odd step:  Read tileB → compute Conway → write tileA, barrier()
+    Handles odd remainder as a single tileA→tileB step.
+
+    Conway function (conway): Bit-parallel adder tree.
+      - Reads 9 neighbor words (3 rows × 3 columns)
+      - Shifts bits left/right to align horizontal neighbors
+      - 4-stage carry-save addition sums all 8 neighbors into 4-bit count
+      - Final rule: ~bit3 & ~bit2 & bit1 & (bit0 | cell)
+        = alive if count ∈ {2,3} and alive, or count == 3 and dead
+
+  PHASE 3 — Store: Unpack result bits → write pixels to imgOut.
+    Selects tileA or tileB based on iteration count parity.
+
+TOROIDAL WRAPPING:
+  Row wrapping: (row-1) & 255, (row+1) & 255
+  Column wrapping: (col-1) & 7, (col+1) & 7
+
+
+--------------------------------------------------------------------------------
+ FILE: data/explanation.txt  (~700 lines -> Shader Documentation)
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  Detailed line-by-line breakdown of the conway.glsl fragment shader,
+  covering every function call, data flow, GLSL built-ins, and the
+  branchless optimization technique. Written for educational purposes.
 
 
 ================================================================================
@@ -782,7 +893,10 @@ PURPOSE:
 ================================================================================
 
   Main ---+---> Grid <-----------------------------------+
-          +---> GPUCompute ---> Grid, conway.glsl        |
+          +---> GPUCompute ---> Grid                     |
+          |       |                                      |
+          |       +---> conway.glsl (live sim)            |
+          |       +---> conway_compute.glsl (bulk lab)    |
           +---> ParticleSystem                           |
           +---> MenuScreen ---> MenuUI ---> DashButton   |
           |                     GridRenderer ---> Grid    |

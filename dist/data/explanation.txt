@@ -1,0 +1,472 @@
+================================================================================
+  CONWAY.GLSL — COMPLETE LINE-BY-LINE EXPLANATION
+================================================================================
+
+WHAT THIS FILE IS:
+  This is a GLSL fragment shader. A fragment shader runs once for EVERY SINGLE
+  PIXEL on screen, in parallel on the GPU. Its sole job is to decide the color
+  of one pixel. In this case, each pixel represents one cell in Conway's Game
+  of Life. The shader reads the current generation from a texture, applies the
+  Conway rules, and writes the next generation's cell state as a color.
+
+WHO CALLS THIS FILE:
+  The Java/Processing application loads this .glsl file, compiles it on the GPU,
+  and activates it before drawing a full-screen quad. Processing's shader()
+  function or raw JOGL calls bind this shader. The GPU then executes main() for
+  every fragment (pixel) of that quad simultaneously.
+
+COLOR CONVENTION:
+  In the texture, BLACK (0.0) = alive, WHITE (1.0) = dead.
+  Inside the shader math, we invert this so 1.0 = alive, 0.0 = dead (easier math).
+  At the end, we invert back before writing to gl_FragColor.
+
+WRAPPING:
+  The grid wraps around like a torus (top connects to bottom, left to right).
+  This is achieved by using fract() on texture coordinates, which wraps any
+  value back into the 0.0–1.0 range.
+
+TWO MODES:
+  The file contains two completely separate implementations selected at
+  compile time via a preprocessor define:
+    - MULTI_STEP_K4 mode: computes 4 generations in a single shader pass
+    - Default (single-step) mode: computes 1 generation per pass
+
+================================================================================
+  LINES 1–10: DECLARATIONS (shared by both modes)
+================================================================================
+
+LINE 1:  #ifdef GL_ES
+  Preprocessor check. Tests if the shader is being compiled for OpenGL ES
+  (mobile/embedded GPUs). Desktop OpenGL does NOT define GL_ES, so on desktop
+  this entire block (lines 2–3) is skipped.
+
+LINE 2:  precision mediump float;
+  Only runs on OpenGL ES. Sets the default floating-point precision to medium
+  (16-bit). Desktop OpenGL ignores precision qualifiers. This is required on
+  ES or the shader won't compile.
+
+LINE 3:  precision mediump int;
+  Same as above but for integers. Sets default integer precision to medium on
+  OpenGL ES devices.
+
+LINE 4:  #endif
+  Ends the #ifdef GL_ES block. Everything after this runs on all platforms.
+
+LINE 6:  uniform sampler2D texture;
+  Declares a uniform variable. "uniform" means this value is set ONCE by the
+  CPU (Java side) and stays constant for every pixel in the current draw call.
+  "sampler2D" is a handle to a 2D texture — this is the image containing the
+  current generation of the Game of Life grid. Each pixel in this texture is
+  one cell. The Java code binds the texture before drawing:
+    - In Processing: shader.set("texture", currentGenPGraphics)
+    - In raw JOGL:  glActiveTexture + glBindTexture + glUniform1i
+
+LINE 7:  uniform vec2 texOffset;
+  Another uniform. This is a 2-component vector (x, y) representing the size
+  of one pixel in UV (texture coordinate) space. If the grid is 512×512, then
+  texOffset = (1.0/512.0, 1.0/512.0). This is how we know "how far to step"
+  to read a neighboring cell. Processing sets this automatically when you use
+  its shader API. For raw JOGL, the Java code sets it manually via glUniform2f.
+
+LINE 9:  varying vec4 vertColor;
+  A "varying" is a value that comes FROM the vertex shader, interpolated across
+  the triangle/quad. vertColor carries the vertex color. Processing's default
+  vertex shader outputs this. We don't actually use it in this shader, but
+  Processing expects it to be declared or the shader pipeline breaks.
+
+LINE 10: varying vec4 vertTexCoord;
+  Another varying from the vertex shader. This carries the texture coordinate
+  (UV position) for the current pixel. vertTexCoord.st (or .xy) gives us the
+  UV coordinate in the range [0.0, 1.0] × [0.0, 1.0] that maps this pixel to
+  a position on the texture. This is THE key input — it tells us which cell
+  we are currently computing.
+
+================================================================================
+  LINES 13–75: MULTI-STEP K=4 MODE
+================================================================================
+
+LINE 13: #ifdef MULTI_STEP_K4
+  Preprocessor conditional. If the Java code compiled this shader with
+  "#define MULTI_STEP_K4" prepended, then lines 14–75 are compiled and the
+  single-step mode (lines 78–104) is excluded. The Java GPU Lab code does this
+  to compute 4 generations per render pass, reducing the number of expensive
+  texture read-back cycles by 4×.
+
+--- THE conway() HELPER FUNCTION (lines 15–19) ---
+
+LINE 15: float conway(float cell, float neighbors) {
+  Declares a helper function that takes two floats:
+    - cell: the current cell state (1.0 = alive, 0.0 = dead)
+    - neighbors: the sum of the 8 surrounding cells (a value from 0.0 to 8.0)
+  Returns 1.0 if the cell should be alive next generation, 0.0 if dead.
+  This function is called from lines 42, 53, 64, and 72.
+
+LINE 16: float survive = cell * step(2.0, neighbors) * step(neighbors, 3.0);
+  Computes the SURVIVAL condition without any if-statements (branchless).
+  Breaking it down piece by piece:
+
+    step(2.0, neighbors):
+      Built-in GLSL function. Returns 1.0 if neighbors >= 2.0, else 0.0.
+      This checks: "does the cell have at least 2 neighbors?"
+
+    step(neighbors, 3.0):
+      Returns 1.0 if 3.0 >= neighbors (i.e., neighbors <= 3.0), else 0.0.
+      This checks: "does the cell have at most 3 neighbors?"
+
+    Multiplying them together:
+      1.0 * 1.0 = 1.0 only when 2 <= neighbors <= 3 (i.e., exactly 2 or 3).
+      Any other count gives 0.0.
+
+    cell * (that result):
+      If the cell is dead (0.0), survive = 0.0 regardless.
+      If the cell is alive (1.0) AND has 2 or 3 neighbors, survive = 1.0.
+
+  This implements Conway's rule: "A live cell with 2 or 3 neighbors survives."
+
+LINE 17: float birth = (1.0 - cell) * step(3.0, neighbors) * step(neighbors, 3.0);
+  Computes the BIRTH condition, also branchless.
+
+    (1.0 - cell):
+      Flips the cell state. If cell is alive (1.0), this is 0.0.
+      If cell is dead (0.0), this is 1.0. Birth only applies to dead cells.
+
+    step(3.0, neighbors):
+      Returns 1.0 if neighbors >= 3.0.
+
+    step(neighbors, 3.0):
+      Returns 1.0 if neighbors <= 3.0.
+
+    Both together: 1.0 only when neighbors == exactly 3.0.
+
+    (1.0 - cell) * (that result):
+      1.0 only when the cell is dead AND has exactly 3 neighbors.
+
+  This implements Conway's rule: "A dead cell with exactly 3 neighbors is born."
+
+LINE 18: return max(survive, birth);
+  Returns the next state. Since survive and birth are mutually exclusive
+  (a cell can't be both alive and dead), at most one of them is 1.0.
+  max() picks whichever is 1.0 (or 0.0 if neither condition is met, meaning
+  the cell dies from loneliness or overcrowding).
+
+LINE 19: }
+  End of the conway() helper function.
+
+--- THE main() FUNCTION FOR MULTI-STEP MODE (lines 21–75) ---
+
+LINE 21: void main() {
+  Entry point of the fragment shader. The GPU calls this once per pixel.
+  "void" means it doesn't return a value — instead it writes to gl_FragColor.
+
+LINE 22: vec2 uv = vertTexCoord.st;
+  Reads the texture coordinate for this pixel from the varying. ".st" is
+  identical to ".xy" — it's just the GLSL texture coordinate naming convention.
+  uv.s = horizontal position (0.0 = left, 1.0 = right)
+  uv.t = vertical position (0.0 = top, 1.0 = bottom)
+
+LINE 23: float dx = texOffset.x;
+  Extracts the horizontal pixel step size. If grid is 512 wide, dx = 1/512.
+  Adding dx to uv.x moves one cell to the right.
+
+LINE 24: float dy = texOffset.y;
+  Extracts the vertical pixel step size. Adding dy to uv.y moves one cell down.
+
+--- STEP 0: Read the 9×9 neighborhood from the texture (lines 26–33) ---
+
+  WHY 9×9? In multi-step mode we compute 4 generations at once. Each generation's
+  Conway rule looks at a 3×3 neighborhood (the cell + 8 neighbors). After 4
+  generations, the "influence radius" expands to 4 cells in every direction from
+  center. So we need a 9×9 block of the ORIGINAL state (generation 0) to have
+  enough data to cascade through 4 generations and get the correct answer for
+  the center cell.
+
+LINE 26: float g0[81];
+  Declares an array of 81 floats (9 × 9 = 81) to store generation 0 cell states.
+  This is a local variable — each pixel gets its own copy on the GPU.
+
+LINE 27: for (int row = -4; row <= 4; row++) {
+  Outer loop: iterates over 9 rows, from 4 above center to 4 below center.
+  row = -4, -3, -2, -1, 0, +1, +2, +3, +4  →  9 values.
+
+LINE 28: for (int col = -4; col <= 4; col++) {
+  Inner loop: iterates over 9 columns per row.
+  col = -4 through +4  →  9 values.
+  Total iterations: 9 × 9 = 81 texture fetches.
+
+LINE 29: vec2 offset = vec2(float(col) * dx, float(row) * dy);
+  Computes the UV offset from the center pixel to the (row, col) neighbor.
+  float(col) casts the int to float (GLSL requires explicit cast).
+  Multiplying by dx/dy converts from "cell count" to UV space.
+  Example: col=1, dx=1/512 → offset.x = 1/512 (one cell to the right).
+
+LINE 30: float texVal = texture2D(texture, fract(uv + offset)).r;
+  THIS IS THE CORE TEXTURE READ. Breaking it down:
+
+    uv + offset:
+      The UV coordinate of the neighbor cell.
+
+    fract(uv + offset):
+      fract() returns the fractional part (e.g., fract(1.2) = 0.2, fract(-0.1) = 0.9).
+      This implements TOROIDAL WRAPPING. If uv + offset goes past 1.0 (right/bottom
+      edge), fract wraps it back to the left/top. If it goes below 0.0, fract wraps
+      to the opposite edge.
+
+    texture2D(texture, ...):
+      Built-in GLSL function. Reads a color from the texture at the given UV coordinate.
+      Returns a vec4 (RGBA). The texture is the current generation image.
+
+    .r:
+      Takes only the red channel. Since cells are grayscale (black or white),
+      R = G = B, so we only need one channel. Returns 0.0 for black (alive)
+      or 1.0 for white (dead).
+
+LINE 31: g0[(row + 4) * 9 + (col + 4)] = 1.0 - texVal;
+  Stores the cell state into the array, INVERTING the color convention:
+    (row + 4): shifts row from [-4,+4] to [0,8] for array indexing.
+    * 9: each row has 9 columns.
+    (col + 4): shifts col from [-4,+4] to [0,8].
+    So the array index goes from 0 to 80.
+    
+    1.0 - texVal: inverts the value. Texture has 0.0=alive, but our math uses
+    1.0=alive. So: 1.0 - 0.0 = 1.0 (alive), 1.0 - 1.0 = 0.0 (dead).
+
+LINE 32: }   (closes inner for loop)
+LINE 33: }   (closes outer for loop)
+
+--- STEP 1: Generation 1 — Apply Conway to 7×7 from g0 → g1 (lines 35–44) ---
+
+  After reading the 9×9 block (g0), we now have enough data to compute
+  generation 1 for the inner 7×7 cells. Why 7×7? Each Conway step needs a
+  1-cell border around it for neighbor lookups. 9×9 minus a 1-cell border on
+  each side = 7×7.
+
+LINE 35: float g1[49];
+  Array for generation 1 results. 7 × 7 = 49 cells.
+
+LINE 36: for (int r = 1; r <= 7; r++) {
+  Iterates rows 1 through 7 of the g0 array (skipping the outer border).
+
+LINE 37: for (int c = 1; c <= 7; c++) {
+  Iterates columns 1 through 7 of g0.
+
+LINE 38: float cell = g0[r * 9 + c];
+  Reads the current cell state from generation 0. r * 9 + c indexes into
+  the 9-wide g0 array at position (row=r, col=c).
+
+LINES 39–41:
+  float n = g0[(r-1)*9+(c-1)] + g0[(r-1)*9+c] + g0[(r-1)*9+(c+1)]
+          + g0[ r   *9+(c-1)]                  + g0[ r   *9+(c+1)]
+          + g0[(r+1)*9+(c-1)] + g0[(r+1)*9+c] + g0[(r+1)*9+(c+1)];
+
+  Sums the 8 neighbors around (r, c) in the g0 array:
+    Row above (r-1): top-left, top-center, top-right
+    Same row (r):    left, [skip center], right
+    Row below (r+1): bottom-left, bottom-center, bottom-right
+  The result n is a float from 0.0 to 8.0.
+
+LINE 42: g1[(r - 1) * 7 + (c - 1)] = conway(cell, n);
+  Calls the conway() helper (defined on line 15) to determine the next state.
+  Stores the result in g1 with shifted indices: (r-1) and (c-1) because g1
+  starts at index 0 for what was row 1, col 1 in g0. g1 is 7 columns wide.
+
+LINE 43: }   (closes inner loop)
+LINE 44: }   (closes outer loop)
+
+--- STEP 2: Generation 2 — Apply Conway to 5×5 from g1 → g2 (lines 46–55) ---
+
+  Same pattern. g1 is 7×7, and we lose a 1-cell border → inner 5×5.
+
+LINE 46: float g2[25];
+  Array for generation 2. 5 × 5 = 25 cells.
+
+LINES 47–54:
+  Identical structure to Step 1. Loops r=1..5, c=1..5 through g1 (which is
+  7 columns wide, hence *7 in the index math). Each cell reads its 8 neighbors
+  from g1, calls conway(), and stores the result in g2 (5 columns wide, hence
+  (r-1)*5+(c-1) indexing).
+
+LINE 55: }   (closes outer loop)
+
+--- STEP 3: Generation 3 — Apply Conway to 3×3 from g2 → g3 (lines 57–66) ---
+
+  g2 is 5×5, lose border → inner 3×3.
+
+LINE 57: float g3[9];
+  Array for generation 3. 3 × 3 = 9 cells.
+
+LINES 58–65:
+  Same pattern. Loops r=1..3, c=1..3 through g2 (5 columns wide, *5).
+  Stores results in g3 (3 columns wide, *3).
+
+--- STEP 4: Generation 4 — Final Conway on center cell (lines 68–72) ---
+
+  g3 is 3×3. One more Conway step gives us the single center cell result.
+
+LINE 68: float centerCell = g3[4];
+  g3[4] is the center of the 3×3 grid:
+    [0][1][2]
+    [3][4][5]    ← index 4 is the center
+    [6][7][8]
+
+LINES 69–71:
+  float neighbors = g3[0] + g3[1] + g3[2]
+                   + g3[3]          + g3[5]
+                   + g3[6] + g3[7] + g3[8];
+  Sums all 8 cells around the center (skipping index 4).
+
+LINE 72: float result = conway(centerCell, neighbors);
+  Applies Conway rules one final time. result is the state of this pixel
+  after 4 complete generations.
+
+LINE 74: gl_FragColor = vec4(vec3(1.0 - result), 1.0);
+  WRITES THE FINAL OUTPUT COLOR.
+
+    1.0 - result:
+      Inverts back to texture convention (1.0=dead=white, 0.0=alive=black).
+
+    vec3(1.0 - result):
+      Creates (R, G, B) all set to the same value → grayscale.
+
+    vec4(..., 1.0):
+      Adds alpha = 1.0 (fully opaque).
+
+    gl_FragColor:
+      Built-in GLSL output variable. Whatever vec4 you write here becomes the
+      color of this pixel in the output framebuffer/texture. The GPU collects
+      all pixels' gl_FragColor values to form the complete next-generation image.
+
+LINE 75: }
+  End of multi-step main().
+
+================================================================================
+  LINES 78–104: SINGLE-STEP MODE (1 generation per pass)
+================================================================================
+
+LINE 78: #else
+  Preprocessor else-branch. If MULTI_STEP_K4 was NOT defined at compile time,
+  the compiler uses this simpler single-step version instead. This is used by
+  the live simulation via Processing's shader API.
+
+LINE 80: void main() {
+  Entry point for single-step mode. Same purpose as line 21.
+
+LINE 81: vec2 uv = vertTexCoord.st;
+  Same as line 22. Gets this pixel's texture coordinate.
+
+LINE 82: float dx = texOffset.x;
+  Same as line 23. Horizontal step size.
+
+LINE 83: float dy = texOffset.y;
+  Same as line 24. Vertical step size.
+
+LINE 85: float n = 0.0;
+  Initializes the neighbor counter to zero.
+
+LINES 86–93: Count all 8 neighbors.
+  Each line reads one neighbor cell and adds its value to n.
+
+LINE 86: n += 1.0 - texture2D(texture, fract(uv + vec2(-dx, -dy))).r;
+  TOP-LEFT neighbor.
+    vec2(-dx, -dy): offset is one cell left and one cell up.
+    uv + vec2(-dx, -dy): UV position of the top-left neighbor.
+    fract(...): wraps for toroidal topology.
+    texture2D(texture, ...): reads the cell color from the texture.
+    .r: red channel (0.0 = black/alive in texture, 1.0 = white/dead).
+    1.0 - (...): inverts so 1.0 = alive, 0.0 = dead.
+    n += ...: adds to neighbor count. A living neighbor contributes 1.0.
+
+LINE 87: n += 1.0 - texture2D(texture, fract(uv + vec2(0.0, -dy))).r;
+  TOP-CENTER neighbor. Same X, one cell up.
+
+LINE 88: n += 1.0 - texture2D(texture, fract(uv + vec2( dx, -dy))).r;
+  TOP-RIGHT neighbor. One cell right, one cell up.
+
+LINE 89: n += 1.0 - texture2D(texture, fract(uv + vec2(-dx, 0.0))).r;
+  LEFT neighbor. One cell left, same row.
+
+LINE 90: n += 1.0 - texture2D(texture, fract(uv + vec2( dx, 0.0))).r;
+  RIGHT neighbor. One cell right, same row.
+
+LINE 91: n += 1.0 - texture2D(texture, fract(uv + vec2(-dx,  dy))).r;
+  BOTTOM-LEFT neighbor. One cell left, one cell down.
+
+LINE 92: n += 1.0 - texture2D(texture, fract(uv + vec2(0.0,  dy))).r;
+  BOTTOM-CENTER neighbor. Same X, one cell down.
+
+LINE 93: n += 1.0 - texture2D(texture, fract(uv + vec2( dx,  dy))).r;
+  BOTTOM-RIGHT neighbor. One cell right, one cell down.
+
+  After all 8 lines, n contains the total number of alive neighbors (0.0 to 8.0).
+
+LINE 95: float cell = 1.0 - texture2D(texture, uv).r;
+  Reads THIS pixel's own cell state (no offset, just uv).
+  Inverts: 1.0 = alive, 0.0 = dead.
+
+LINE 97: float survive = cell * step(2.0, n) * step(n, 3.0);
+  Identical logic to line 16 in the conway() function.
+  survive = 1.0 only if cell is alive AND n is 2 or 3.
+
+LINE 98: float birth = (1.0 - cell) * step(3.0, n) * step(n, 3.0);
+  Identical logic to line 17.
+  birth = 1.0 only if cell is dead AND n is exactly 3.
+
+LINE 99: float next = max(survive, birth);
+  Identical to line 18. next = 1.0 if the cell lives, 0.0 if it dies.
+
+LINE 101: gl_FragColor = vec4(vec3(1.0 - next), 1.0);
+  Identical to line 74. Inverts back to texture convention and writes the pixel.
+
+LINE 102: }
+  End of single-step main().
+
+LINE 104: #endif
+  Ends the #ifdef/#else/#endif preprocessor block. The compiler only ever
+  compiles ONE of the two modes — whichever the Java code selected.
+
+LINE 105: (empty trailing newline)
+  Standard practice. Many compilers/tools expect files to end with a newline.
+
+================================================================================
+  EXECUTION FLOW SUMMARY
+================================================================================
+
+  1. Java application initializes a texture containing the grid (black/white pixels).
+  2. Java binds the texture and sets uniforms (texture, texOffset).
+  3. Java draws a full-screen quad with this shader active.
+  4. GPU launches main() for EVERY pixel simultaneously (massively parallel).
+  5. Each pixel:
+     a. Reads its UV position from vertTexCoord
+     b. Samples neighbor cells from the texture
+     c. Applies Conway rules (branchless math)
+     d. Writes the next-gen state to gl_FragColor
+  6. The GPU assembles all pixel outputs into a new texture.
+  7. Java swaps textures (new output becomes next input) and repeats.
+
+  In SINGLE-STEP mode: each draw call = 1 generation.
+  In MULTI-STEP mode:  each draw call = 4 generations.
+
+================================================================================
+  KEY GLSL BUILT-IN FUNCTIONS USED
+================================================================================
+
+  texture2D(sampler, uv):  Reads a color (vec4) from a texture at UV position.
+  fract(x):                Returns the fractional part: x - floor(x).
+  step(edge, x):           Returns 0.0 if x < edge, else 1.0. No branching.
+  max(a, b):               Returns the larger of a and b.
+  vec2(x, y):              Constructs a 2D vector.
+  vec3(x):                 Constructs a 3D vector with all components = x.
+  vec4(rgb, a):            Constructs a 4D vector (color with alpha).
+
+================================================================================
+  KEY GLSL CONCEPTS IN THIS SHADER
+================================================================================
+
+  uniform:   Set once per draw call by CPU. Same for all pixels.
+  varying:   Interpolated per-pixel from vertex shader outputs.
+  sampler2D: A reference to a bound texture.
+  gl_FragColor: The output — the color this pixel will be drawn as.
+  #ifdef:    Compile-time conditional (preprocessor). Not runtime branching.
+  step():    The "branchless trick" — avoids GPU-costly if/else statements.
+             GPUs run pixels in lockstep (warps/wavefronts), so branches where
+             some pixels take one path and others take another path cause both
+             paths to execute. step() avoids this entirely with pure math.

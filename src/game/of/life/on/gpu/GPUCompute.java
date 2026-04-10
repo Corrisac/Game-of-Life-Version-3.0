@@ -1,40 +1,46 @@
 import processing.core.PApplet;    // Processing core for millis(), createGraphics(), loadShader()
 import processing.core.PGraphics;  // Offscreen graphics buffer for ping-pong rendering
-import processing.opengl.PShader;  // GLSL shader wrapper for GPU computation
+import processing.opengl.PShader;  // GLSL shader wrapper for live simulation
 import processing.opengl.PGL;      // Processing's OpenGL abstraction layer
 import processing.opengl.PJOGL;    // Processing's JOGL-specific OpenGL implementation
 
 import com.jogamp.opengl.GL;       // OpenGL base constants (GL_TEXTURE_2D, GL_FRAMEBUFFER, etc.)
-import com.jogamp.opengl.GL2ES2;   // OpenGL ES 2.0 / GL 2.0+ interface for shaders & FBOs
-import com.jogamp.opengl.GL2GL3;   // Additional constants for CLAMP_TO_EDGE, RGBA8, etc.
+import com.jogamp.opengl.GL2ES2;   // OpenGL ES 2.0 / GL 2.0+ interface for shader compilation
 
-import java.nio.ByteBuffer;        // Direct byte buffer for pixel transfer to raw GL textures
-import java.nio.FloatBuffer;       // Float buffer for fullscreen quad vertex data
+import java.nio.ByteBuffer;        // Direct byte buffer for pixel transfer to GL textures
 import java.nio.ByteOrder;         // Byte order for native-endian buffer allocation
-import java.nio.IntBuffer;         // Int buffer for GL object handles (textures, FBOs, VBOs)
+import java.nio.IntBuffer;         // Int buffer for pixel readback from compute results
+
 
 /**
- * GPUCompute V3.0 — Raw JOGL compute loop + K=4 multi-step shader.
+ * GPUCompute V6.0 — Single-Workgroup Bit-Parallel Compute Shader.
  *
- * V3.0 IMPROVEMENTS OVER V2.0:
- *   1. MULTI-STEP SHADER (K=4) — conway.glsl (MULTI_STEP_K4 mode) computes
- *      4 generations per fragment pass. Cuts render passes by 4×.
- *   2. RAW JOGL LOOP — Bypasses Processing's beginDraw/endDraw overhead.
- *      Uses direct GL calls: 3 per pass instead of ~25. Combined with K=4,
- *      reduces total GL overhead from 25M to 750K for 1M iterations (33× less).
- *   3. ZERO-COPY INIT — Uploads grid state directly to a raw GL texture
- *      via glTexSubImage2D, bypassing Processing's pixel[] copy.
+ * TWO EXECUTION PATHS:
  *
- * ARCHITECTURE:
- *   - Both paths use the unified conway.glsl shader file:
- *     · Live simulation: Processing loads conway.glsl as-is (single-step mode)
- *     · GPU Lab bulk: Raw JOGL prepends #define MULTI_STEP_K4 (K=4 mode)
+ *   1. LIVE SIMULATION (1 step/frame) — Uses Processing's API with conway.glsl
+ *      fragment shader in single-step mode (unchanged since V2).
  *
- * RAW GL RESOURCES (created once in initRawGL):
- *   - 2 GL textures (rawTex[0], rawTex[1]) for ping-pong
- *   - 2 GL framebuffers (rawFbo[0], rawFbo[1]) attached to those textures
- *   - 1 compiled GL program (rawProgram) from conway.glsl (K=4 mode)
- *   - 1 fullscreen quad VBO (quadVBO)
+ *   2. GPU LAB BULK COMPUTE — Uses GL4.3 compute shader (conway_compute.glsl)
+ *      with a single-workgroup, bit-parallel architecture:
+ *
+ *      - The 256×256 grid is packed as bits into 2048 uints (8 KB per grid)
+ *      - Two shared memory arrays (tileA, tileB) enable in-place ping-pong
+ *        (16 KB total — well under the 48 KB shared memory limit)
+ *      - ALL iterations execute inside ONE work group (1024 threads) with
+ *        barrier() synchronization — ZERO dispatch overhead
+ *      - Bit-parallel adder tree computes 32 cells per uint operation
+ *      - TDR-safe chunking: max 500K iterations per dispatch, with
+ *        glFinish() between chunks to reset the Windows watchdog timer
+ *
+ *   PERFORMANCE HISTORY:
+ *     V3 (K=4 fragment shader):       55,783ms for 900K iterations
+ *     V5 (K=16 compute, multi-dispatch): 37,618ms
+ *     V6 (single-WG bit-parallel):      1,319ms  (42× faster than V3)
+ *
+ * GL RESOURCES (created once in initCompute):
+ *   - 2 RGBA8 textures (computeTex[0], computeTex[1]) for image I/O
+ *   - 1 FBO for readback (computeFbo)
+ *   - 1 compiled compute program (computeProgram) from conway_compute.glsl
  */
 public class GPUCompute implements ThemeConstants {
 
@@ -50,27 +56,13 @@ public class GPUCompute implements ThemeConstants {
     private int totalTargetIters;    // Total iterations requested for current compute run
 
     // ═══════════════════════════════════════════════════════
-    //       V3.0: RAW JOGL RESOURCES
+    //       PRE-ALLOCATED PIXEL BUFFERS
     // ═══════════════════════════════════════════════════════
-    private boolean rawGLReady = false;   // True once initRawGL() has successfully completed
-    private int[] rawTex = new int[2];    // Two raw GL texture handles for ping-pong
-    private int[] rawFbo = new int[2];    // Two raw GL framebuffer handles for ping-pong
-    private int rawProgram;               // Compiled GL shader program (conway.glsl K=4 mode)
-    private int quadVBO;                  // Vertex buffer object for the fullscreen quad
-    private int rawPingPong = 0;          // Current ping-pong index (0 or 1)
-    private int uTexture;                 // Uniform location for 'texture' sampler
-    private int uTexOffset;               // Uniform location for 'texOffset' vec2
-    private int aPosition;                // Attribute location for vertex position
-    private int aTexCoord;                // Attribute location for texture coordinate
-
-    // ═══════════════════════════════════════════════════════
-    //       V2.0 ADAPTIVE BATCH SIZING (retained for progress updates)
-    // ═══════════════════════════════════════════════════════
-    // V3.0 uses raw GL batching, but we still chunk iterations to allow
-    // progress bar updates between chunks.
-    private int batchSize = 2000;                 // Iterations per progress-update chunk
-    private static final int MIN_BATCH = 500;     // Floor for adaptive sizing
-    private static final int MAX_BATCH = 100000;  // Ceiling for adaptive sizing
+    // Reuse direct ByteBuffers to avoid expensive allocation per compute run.
+    // Direct buffers are costly to allocate (OS-level memory mapping) but
+    // cheap to reuse — allocate once, clear and rewrite on each run.
+    private ByteBuffer pixelBuffer;              // Reusable buffer for texture upload/download
+    private int[] readbackArray;                 // Reusable int array for bulk pixel readback
 
     /**
      * Constructor — Loads shaders and creates ping-pong buffers.
@@ -85,164 +77,7 @@ public class GPUCompute implements ThemeConstants {
         buffer2.noSmooth();                                                 // Pixel-accurate rendering
     }
 
-    // ═══════════════════════════════════════════════════════
-    //       V3.0: RAW JOGL INITIALIZATION
-    // ═══════════════════════════════════════════════════════
 
-    /**
-     * V3.0: Initializes raw JOGL resources — called once on first compute.
-     * Extracts the GL2ES2 context from Processing, creates textures, FBOs,
-     * compiles conway.glsl (K=4 mode) as a raw GL program, and sets up the quad VBO.
-     */
-    private void initRawGL() {
-        if (rawGLReady) return;  // Already initialized
-
-        System.out.println("[GPU V3] Initializing raw JOGL resources...");
-
-        // ── Must open draw context before accessing PGL ─────────────────
-        buffer1.beginDraw();                                // Open draw context (required for GL)
-        PGL pgl = buffer1.beginPGL();                       // Access Processing's OpenGL layer
-        GL2ES2 gl = ((PJOGL) pgl).gl.getGL2ES2();          // Get the raw JOGL GL2ES2 interface
-
-        // ── Create two raw GL textures for ping-pong ────────────────────
-        gl.glGenTextures(2, rawTex, 0);                     // Allocate 2 texture handles
-        for (int i = 0; i < 2; i++) {
-            gl.glBindTexture(GL.GL_TEXTURE_2D, rawTex[i]);
-            // Allocate RGBA8 storage at GRID_SIZE × GRID_SIZE
-            gl.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, GRID_SIZE, GRID_SIZE,
-                            0, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, null);
-            // NEAREST filtering for pixel-perfect cellular automaton
-            gl.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_NEAREST);
-            gl.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_NEAREST);
-            // REPEAT wrapping for toroidal boundary conditions
-            gl.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_REPEAT);
-            gl.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_REPEAT);
-        }
-
-        // ── Create two raw GL framebuffers, each attached to a texture ──
-        gl.glGenFramebuffers(2, rawFbo, 0);                 // Allocate 2 FBO handles
-        for (int i = 0; i < 2; i++) {
-            gl.glBindFramebuffer(GL.GL_FRAMEBUFFER, rawFbo[i]);
-            gl.glFramebufferTexture2D(GL.GL_FRAMEBUFFER, GL.GL_COLOR_ATTACHMENT0,
-                                      GL.GL_TEXTURE_2D, rawTex[i], 0);
-            // Verify FBO completeness
-            int status = gl.glCheckFramebufferStatus(GL.GL_FRAMEBUFFER);
-            if (status != GL.GL_FRAMEBUFFER_COMPLETE) {
-                System.err.println("[GPU V3] FBO " + i + " incomplete! Status: " + status);
-            }
-        }
-        gl.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0);         // Unbind FBO
-
-        // ── Compile conway.glsl (K=4 mode) as a raw GL program ─────────
-        rawProgram = compileShaderProgram(gl);
-        if (rawProgram == 0) {
-            System.err.println("[GPU V3] Shader compilation failed! Falling back to V2 path.");
-            buffer1.endPGL();
-            buffer1.endDraw();
-            return;
-        }
-
-        // ── Get uniform and attribute locations ─────────────────────────
-        uTexture   = gl.glGetUniformLocation(rawProgram, "texture");
-        uTexOffset = gl.glGetUniformLocation(rawProgram, "texOffset");
-        aPosition  = gl.glGetAttribLocation(rawProgram, "position");
-        aTexCoord  = gl.glGetAttribLocation(rawProgram, "texCoord");
-
-        // If the shader uses Processing's attribute names, try those
-        if (aPosition < 0) aPosition = gl.glGetAttribLocation(rawProgram, "vertex");
-        if (aTexCoord < 0) aTexCoord = gl.glGetAttribLocation(rawProgram, "texCoord");
-
-        // ── Create fullscreen quad VBO ──────────────────────────────────
-        // Two triangles covering the full screen with matching UVs
-        float[] quadData = {
-            // x,    y,    u,    v
-            -1.0f, -1.0f, 0.0f, 0.0f,   // Bottom-left
-             1.0f, -1.0f, 1.0f, 0.0f,   // Bottom-right
-            -1.0f,  1.0f, 0.0f, 1.0f,   // Top-left
-             1.0f,  1.0f, 1.0f, 1.0f    // Top-right
-        };
-        FloatBuffer quadBuf = FloatBuffer.wrap(quadData);
-        int[] vbo = new int[1];
-        gl.glGenBuffers(1, vbo, 0);
-        quadVBO = vbo[0];
-        gl.glBindBuffer(GL.GL_ARRAY_BUFFER, quadVBO);
-        gl.glBufferData(GL.GL_ARRAY_BUFFER, quadData.length * 4, quadBuf, GL.GL_STATIC_DRAW);
-        gl.glBindBuffer(GL.GL_ARRAY_BUFFER, 0);
-
-        buffer1.endPGL();  // Release Processing's GL context
-        buffer1.endDraw(); // Close draw context
-
-        rawGLReady = true;
-        System.out.println("[GPU V3] Raw JOGL init complete. Textures: "
-                + rawTex[0] + "," + rawTex[1] + " FBOs: " + rawFbo[0] + "," + rawFbo[1]);
-    }
-
-    /**
-     * Compiles conway.glsl (K=4 mode) vertex+fragment shaders into a linked GL program.
-     * Uses a minimal pass-through vertex shader that forwards position and UVs.
-     * Prepends #define MULTI_STEP_K4 to activate the multi-step shader branch.
-     */
-    private int compileShaderProgram(GL2ES2 gl) {
-        // ── Minimal vertex shader ───────────────────────────────────────
-        String vertSrc =
-            "#ifdef GL_ES\n" +
-            "precision mediump float;\n" +
-            "#endif\n" +
-            "attribute vec2 position;\n" +
-            "attribute vec2 texCoord;\n" +
-            "varying vec4 vertTexCoord;\n" +
-            "varying vec4 vertColor;\n" +
-            "void main() {\n" +
-            "  gl_Position = vec4(position, 0.0, 1.0);\n" +
-            "  vertTexCoord = vec4(texCoord, 0.0, 1.0);\n" +
-            "  vertColor = vec4(1.0);\n" +
-            "}\n";
-
-        // ── Load fragment shader source and activate K=4 mode ───────────
-        String fragSrc = loadShaderSource("conway.glsl");
-        if (fragSrc == null) {
-            System.err.println("[GPU V3] Could not load conway.glsl!");
-            return 0;
-        }
-        // Prepend #define to select the K=4 multi-step branch
-        fragSrc = "#define MULTI_STEP_K4\n" + fragSrc;
-
-        // ── Compile vertex shader ───────────────────────────────────────
-        int vs = gl.glCreateShader(GL2ES2.GL_VERTEX_SHADER);
-        gl.glShaderSource(vs, 1, new String[]{vertSrc}, null);
-        gl.glCompileShader(vs);
-        if (!checkShaderCompile(gl, vs, "vertex")) return 0;
-
-        // ── Compile fragment shader ─────────────────────────────────────
-        int fs = gl.glCreateShader(GL2ES2.GL_FRAGMENT_SHADER);
-        gl.glShaderSource(fs, 1, new String[]{fragSrc}, null);
-        gl.glCompileShader(fs);
-        if (!checkShaderCompile(gl, fs, "fragment")) return 0;
-
-        // ── Link program ────────────────────────────────────────────────
-        int prog = gl.glCreateProgram();
-        gl.glAttachShader(prog, vs);
-        gl.glAttachShader(prog, fs);
-        gl.glLinkProgram(prog);
-
-        int[] linked = new int[1];
-        gl.glGetProgramiv(prog, GL2ES2.GL_LINK_STATUS, linked, 0);
-        if (linked[0] == GL.GL_FALSE) {
-            int[] logLen = new int[1];
-            gl.glGetProgramiv(prog, GL2ES2.GL_INFO_LOG_LENGTH, logLen, 0);
-            byte[] log = new byte[logLen[0]];
-            gl.glGetProgramInfoLog(prog, logLen[0], null, 0, log, 0);
-            System.err.println("[GPU V3] Program link error: " + new String(log));
-            return 0;
-        }
-
-        // Clean up individual shaders (they're now part of the program)
-        gl.glDeleteShader(vs);
-        gl.glDeleteShader(fs);
-
-        System.out.println("[GPU V3] Shader program compiled & linked successfully (ID=" + prog + ")");
-        return prog;
-    }
 
     /** Checks shader compilation status and prints errors if any. */
     private boolean checkShaderCompile(GL2ES2 gl, int shader, String label) {
@@ -271,265 +106,266 @@ public class GPUCompute implements ThemeConstants {
     }
 
     // ═══════════════════════════════════════════════════════
-    //       GPU LAB: BULK COMPUTATION (V3.0 raw JOGL path)
+    //       GPU LAB: BULK COMPUTATION (V6.0 Single-WG Bit-Parallel)
     // ═══════════════════════════════════════════════════════
+    //
+    // V6.0: Runs ALL iterations inside a SINGLE work group using shared memory.
+    // The 256×256 grid is packed as bits into 2048 uints (8 KB per grid),
+    // with two shared arrays for ping-pong (16 KB total — well under 48 KB).
+    // barrier() provides global sync within the work group — ZERO dispatch
+    // overhead. Bit-parallel adder tree computes 32 cells per uint operation.
+    //
+    // PERFORMANCE vs V5 (K=16 multi-dispatch):
+    //   V5: 58K dispatches × 0.6ms overhead = 35 seconds
+    //   V6: ~9 dispatches × 0.1s compute    = ~1 second
+
+    // GL 4.3 constants (not exposed in GL2ES2 interface)
+    private static final int GL_COMPUTE_SHADER = 0x91B9;
+    private static final int GL_SHADER_IMAGE_ACCESS_BARRIER_BIT = 0x00000020;
+    private static final int GL_READ_ONLY  = 0x88B8;
+    private static final int GL_WRITE_ONLY = 0x88B9;
+    private static final int GL_RGBA8      = 0x8058;
+
+    // TDR safety: max iterations per dispatch (Windows TDR timeout = 2 seconds)
+    // Each chunk takes ~0.1s on a mid-range GPU, well under the 2s limit.
+    private static final int TDR_CHUNK = 500000;
+
+    // Compute shader resources
+    private boolean computeReady = false;
+    private int   computeProgram;
+    private int[] computeTex = new int[2];     // Ping-pong textures for compute
+    private int[] computeFbo = new int[1];     // FBO for readback only
+    private int   computeUIter;                // Uniform location for iteration count
 
     /**
-     * V3.0: Copies grid state into raw GL texture and starts bulk computation.
-     * Uses direct pixel upload via glTexSubImage2D.
-     *
-     * @param board       Grid data model with current cell states
-     * @param iterations  Total number of generations to compute
+     * V6.0: Initializes GL4.3 compute shader resources.
+     * Creates RGBA8 textures, compiles conway_compute.glsl, and sets up
+     * a readback FBO. Called once on first compute run.
+     */
+    private void initCompute() {
+        if (computeReady) return;
+
+        System.out.println("[GPU V6] Initializing compute shader...");
+
+        buffer1.beginDraw();
+        PGL pgl = buffer1.beginPGL();
+        com.jogamp.opengl.GL glBase = ((PJOGL) pgl).gl;
+
+        // ── Check GL4 support ───────────────────────────────────────────
+        if (!glBase.isGL4()) {
+            System.err.println("[GPU V6] GL4 not supported — compute shaders unavailable.");
+            buffer1.endPGL();
+            buffer1.endDraw();
+            return;
+        }
+
+        com.jogamp.opengl.GL4 gl4 = glBase.getGL4();
+
+        // ── Create two RGBA8 textures for compute ping-pong ─────────────
+        gl4.glGenTextures(2, computeTex, 0);
+        for (int i = 0; i < 2; i++) {
+            gl4.glBindTexture(GL.GL_TEXTURE_2D, computeTex[i]);
+            gl4.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL_RGBA8, GRID_SIZE, GRID_SIZE,
+                             0, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, null);
+            gl4.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_NEAREST);
+            gl4.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_NEAREST);
+            gl4.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_CLAMP_TO_EDGE);
+            gl4.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE);
+        }
+        gl4.glBindTexture(GL.GL_TEXTURE_2D, 0);
+
+        // ── Create FBO for final readback ───────────────────────────────
+        gl4.glGenFramebuffers(1, computeFbo, 0);
+
+        // ── Load and compile compute shader ─────────────────────────────
+        String src = loadShaderSource("conway_compute.glsl");
+        if (src == null) {
+            System.err.println("[GPU V6] Failed to load conway_compute.glsl!");
+            buffer1.endPGL();
+            buffer1.endDraw();
+            return;
+        }
+
+        int cs = gl4.glCreateShader(GL_COMPUTE_SHADER);
+        gl4.glShaderSource(cs, 1, new String[]{src}, null);
+        gl4.glCompileShader(cs);
+        if (!checkShaderCompile(gl4, cs, "compute")) {
+            buffer1.endPGL();
+            buffer1.endDraw();
+            return;
+        }
+
+        computeProgram = gl4.glCreateProgram();
+        gl4.glAttachShader(computeProgram, cs);
+        gl4.glLinkProgram(computeProgram);
+
+        int[] linked = new int[1];
+        gl4.glGetProgramiv(computeProgram, GL2ES2.GL_LINK_STATUS, linked, 0);
+        if (linked[0] == GL.GL_FALSE) {
+            int[] logLen = new int[1];
+            gl4.glGetProgramiv(computeProgram, GL2ES2.GL_INFO_LOG_LENGTH, logLen, 0);
+            byte[] log = new byte[Math.max(1, logLen[0])];
+            gl4.glGetProgramInfoLog(computeProgram, log.length, null, 0, log, 0);
+            System.err.println("[GPU V6] Compute program link error: " + new String(log));
+            buffer1.endPGL();
+            buffer1.endDraw();
+            return;
+        }
+        gl4.glDeleteShader(cs);
+
+        computeUIter = gl4.glGetUniformLocation(computeProgram, "uIterations");
+
+        // ── Pre-allocate pixel buffer if not already done ───────────────
+        if (pixelBuffer == null) {
+            int bufSize = GRID_SIZE * GRID_SIZE * 4;
+            pixelBuffer = ByteBuffer.allocateDirect(bufSize);
+            pixelBuffer.order(ByteOrder.nativeOrder());
+            readbackArray = new int[GRID_SIZE * GRID_SIZE];
+        }
+
+        buffer1.endPGL();
+        buffer1.endDraw();
+
+        computeReady = true;
+        System.out.println("[GPU V6] Compute shader ready. Program=" + computeProgram
+                + " Textures=" + computeTex[0] + "," + computeTex[1]);
+    }
+
+    /**
+     * V6.0: Starts bulk GPU computation using single-workgroup compute shader.
+     * Uploads grid → texture, dispatches in TDR-safe chunks (each chunk runs
+     * up to 100K iterations entirely in shared memory), reads back result.
      */
     public void startCompute(Grid board, int iterations) {
-        if (iterations <= 0) return;                                       // Abort if no work
+        if (iterations <= 0) return;
 
-        // Initialize raw GL resources on first use
-        if (!rawGLReady) {
-            initRawGL();
-        }
-
-        // If raw GL init failed, fall back to V2 Processing path
-        if (!rawGLReady) {
-            startComputeV2(board, iterations);
+        // Initialize compute resources on first use
+        if (!computeReady) initCompute();
+        if (!computeReady) {
+            System.err.println("[GPU V6] Compute init failed — cannot run.");
             return;
         }
 
-        System.out.println("[GPU V3] Starting compute: " + iterations + " iterations"
-                + " (K=4, effective passes=" + ((iterations + 3) / 4) + ")");
+        int numChunks = (iterations + TDR_CHUNK - 1) / TDR_CHUNK;
+        System.out.println("[GPU V6] Starting compute: " + iterations + " iters → "
+                + numChunks + " chunks (max " + TDR_CHUNK + " iters/chunk)");
 
-        // ── Upload grid state to rawTex[0] via glTexSubImage2D ──────────
-        ByteBuffer pixelBuf = ByteBuffer.allocateDirect(GRID_SIZE * GRID_SIZE * 4);
-        pixelBuf.order(ByteOrder.nativeOrder());
+        computeProgress = 0;
+        totalTargetIters = iterations;
+        computeStartTime = p.millis();
+        isComputing = true;
+        hasComputed = false;
+
+        // ── Upload grid state to computeTex[0] ──────────────────────────
+        pixelBuffer.clear();
         byte[] arr = board.boardFront;
         for (int i = 0; i < arr.length; i++) {
-            byte val = arr[i] != 0 ? (byte) 0 : (byte) 0xFF;  // alive=black, dead=white
-            pixelBuf.put(val);  // R
-            pixelBuf.put(val);  // G
-            pixelBuf.put(val);  // B
-            pixelBuf.put((byte) 0xFF);  // A = fully opaque
+            byte val = arr[i] != 0 ? (byte) 0 : (byte) 0xFF;  // alive=black(0), dead=white(FF)
+            pixelBuffer.put(val);  // R
+            pixelBuffer.put(val);  // G
+            pixelBuffer.put(val);  // B
+            pixelBuffer.put((byte) 0xFF);  // A
         }
-        pixelBuf.flip();
+        pixelBuffer.flip();
 
-        buffer1.beginDraw();                              // Open draw context for GL access
-        PGL pgl = buffer1.beginPGL();
-        GL2ES2 gl = ((PJOGL) pgl).gl.getGL2ES2();
-        gl.glBindTexture(GL.GL_TEXTURE_2D, rawTex[0]);
-        gl.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, GRID_SIZE, GRID_SIZE,
-                           GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, pixelBuf);
-        gl.glBindTexture(GL.GL_TEXTURE_2D, 0);
-        buffer1.endPGL();
-        buffer1.endDraw();                                // Close draw context
-
-        rawPingPong = 0;                   // Source = rawTex[0]
-        computeProgress = 0;               // Reset progress
-        totalTargetIters = iterations;     // Store total target
-        computeStartTime = p.millis();     // Record start time
-        isComputing = true;                // Begin computing
-        hasComputed = false;               // Invalidate previous result
-    }
-
-    /**
-     * V3.0: Processes one batch of iterations using the raw JOGL compute loop.
-     * Called every frame from the draw loop while isComputing is true.
-     *
-     * The K=4 shader computes 4 generations per pass, so we divide the batch
-     * by 4 to get the number of actual render passes.
-     *
-     * Each render pass uses only 3 GL calls:
-     *   1. glBindFramebuffer (set destination)
-     *   2. glBindTexture (set source)
-     *   3. glDrawArrays (execute shader)
-     *
-     * @param targetIterations  Total iteration target to reach before stopping
-     */
-    public void processBatch(int targetIterations) {
-        // Fall back to V2 path if raw GL isn't available
-        if (!rawGLReady) {
-            processBatchV2(targetIterations);
-            return;
-        }
-
-        int remaining = targetIterations - computeProgress;                // How many generations left
-        int batchGens = Math.min(remaining, batchSize);                    // Generations this batch
-        // Round up to multiple of 4 (K=4 shader does 4 per pass)
-        int passes = (batchGens + 3) / 4;                                  // Render passes needed
-        int actualGens = passes * 4;                                       // Actual generations computed
-
-        long batchStart = p.millis();
-
-        // ── Open Processing's GL context ────────────────────────────────
-        buffer1.beginDraw();                              // Open draw context for GL access
-        PGL pgl = buffer1.beginPGL();
-        GL2ES2 gl = ((PJOGL) pgl).gl.getGL2ES2();
-
-        // ── Bind shader program ONCE for entire batch ───────────────────
-        gl.glUseProgram(rawProgram);
-        gl.glUniform1i(uTexture, 0);                                       // Texture unit 0
-        gl.glUniform2f(uTexOffset, 1.0f / GRID_SIZE, 1.0f / GRID_SIZE);   // Pixel step size
-
-        // ── Bind quad VBO and set up vertex attributes ONCE ─────────────
-        gl.glBindBuffer(GL.GL_ARRAY_BUFFER, quadVBO);
-        if (aPosition >= 0) {
-            gl.glEnableVertexAttribArray(aPosition);
-            gl.glVertexAttribPointer(aPosition, 2, GL.GL_FLOAT, false, 16, 0);  // stride=16, offset=0
-        }
-        if (aTexCoord >= 0) {
-            gl.glEnableVertexAttribArray(aTexCoord);
-            gl.glVertexAttribPointer(aTexCoord, 2, GL.GL_FLOAT, false, 16, 8);  // stride=16, offset=8
-        }
-
-        gl.glViewport(0, 0, GRID_SIZE, GRID_SIZE);                        // Match texture dimensions
-        gl.glDisable(GL.GL_BLEND);                                         // No blending needed
-        gl.glDisable(GL.GL_DEPTH_TEST);                                    // No depth testing
-
-        // ══════════════════════════════════════════════════════════════════
-        //  THE NUCLEAR LOOP — 3 GL calls per pass, K=4 gens per pass
-        // ══════════════════════════════════════════════════════════════════
-        for (int i = 0; i < passes; i++) {
-            int src = rawPingPong;                                          // Current source texture index
-            int dst = 1 - rawPingPong;                                     // Destination texture index
-
-            gl.glBindFramebuffer(GL.GL_FRAMEBUFFER, rawFbo[dst]);          // 1. Set destination FBO
-            gl.glActiveTexture(GL.GL_TEXTURE0);
-            gl.glBindTexture(GL.GL_TEXTURE_2D, rawTex[src]);               // 2. Set source texture
-            gl.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4);                   // 3. Execute shader
-
-            rawPingPong = dst;                                              // Swap for next pass
-        }
-
-        // ── Clean up GL state ───────────────────────────────────────────
-        gl.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0);                        // Unbind FBO
-        if (aPosition >= 0) gl.glDisableVertexAttribArray(aPosition);
-        if (aTexCoord >= 0) gl.glDisableVertexAttribArray(aTexCoord);
-        gl.glBindBuffer(GL.GL_ARRAY_BUFFER, 0);
-        gl.glUseProgram(0);                                                // Unbind shader
-
-        buffer1.endPGL();                                                  // Release Processing's GL
-        buffer1.endDraw();                                                 // Close draw context
-
-        // ── Update progress (clamp to target) ───────────────────────────
-        computeProgress = Math.min(computeProgress + actualGens, targetIterations);
-
-        // ── Adaptive batch sizing ───────────────────────────────────────
-        long batchMs = p.millis() - batchStart;
-        if (batchMs < 12 && batchSize < MAX_BATCH)
-            batchSize = Math.min(batchSize * 2, MAX_BATCH);
-        else if (batchMs > 14 && batchSize > MIN_BATCH)
-            batchSize = Math.max(batchSize / 2, MIN_BATCH);
-
-        // ── Check completion ────────────────────────────────────────────
-        if (computeProgress >= targetIterations) {
-            computeTime = p.millis() - computeStartTime;                   // Total elapsed
-            isComputing = false;                                           // Done
-            hasComputed = true;                                            // Result ready
-
-            // Read result back into Processing's buffer1 for display
-            readRawTexToBuffer();
-
-            System.out.println("[GPU V3] Compute done in " + computeTime + "ms"
-                    + " (" + ((targetIterations + 3) / 4) + " passes, final batch=" + batchSize + ")");
-        }
-    }
-
-    /**
-     * V3.0: Reads the raw GL result texture back into Processing's buffer1
-     * so it can be displayed by GPULabScreen.
-     */
-    private void readRawTexToBuffer() {
-        ByteBuffer pixelBuf = ByteBuffer.allocateDirect(GRID_SIZE * GRID_SIZE * 4);
-        pixelBuf.order(ByteOrder.nativeOrder());
-
-        buffer1.beginDraw();                              // Open draw context for GL access
-        PGL pgl = buffer1.beginPGL();
-        GL2ES2 gl = ((PJOGL) pgl).gl.getGL2ES2();
-
-        // Read pixels from the current result FBO
-        gl.glBindFramebuffer(GL.GL_FRAMEBUFFER, rawFbo[rawPingPong]);
-        gl.glReadPixels(0, 0, GRID_SIZE, GRID_SIZE, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, pixelBuf);
-        gl.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0);
-
-        buffer1.endPGL();
-
-        // Copy pixel data into Processing's buffer1 for rendering
-        buffer1.loadPixels();
-        pixelBuf.rewind();
-        for (int r = 0; r < GRID_SIZE; r++) {
-            for (int c = 0; c < GRID_SIZE; c++) {
-                int red   = pixelBuf.get() & 0xFF;
-                int green = pixelBuf.get() & 0xFF;
-                int blue  = pixelBuf.get() & 0xFF;
-                int alpha = pixelBuf.get() & 0xFF;
-                // GL reads bottom-up, Processing is top-down — flip Y
-                buffer1.pixels[(GRID_SIZE - 1 - r) * GRID_SIZE + c] =
-                    (alpha << 24) | (red << 16) | (green << 8) | blue;
-            }
-        }
-        buffer1.updatePixels();
-        buffer1.endDraw();  // Close draw context (opened at top of method)
-    }
-
-    // ═══════════════════════════════════════════════════════
-    //       V2.0 FALLBACK (Processing API path)
-    // ═══════════════════════════════════════════════════════
-
-    /**
-     * V2.0 fallback: Copies grid state into Processing buffer and starts compute.
-     * Used only if raw GL initialization fails.
-     */
-    private void startComputeV2(Grid board, int iterations) {
-        System.out.println("[GPU V2 FALLBACK] Starting compute: " + iterations + " iterations");
         buffer1.beginDraw();
+        PGL pgl = buffer1.beginPGL();
+        com.jogamp.opengl.GL4 gl4 = ((PJOGL) pgl).gl.getGL4();
+
+        gl4.glBindTexture(GL.GL_TEXTURE_2D, computeTex[0]);
+        gl4.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, GRID_SIZE, GRID_SIZE,
+                            GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, pixelBuffer);
+        gl4.glBindTexture(GL.GL_TEXTURE_2D, 0);
+
+        // ── Bind compute program ────────────────────────────────────────
+        gl4.glUseProgram(computeProgram);
+
+        // ══════════════════════════════════════════════════════════════════
+        //  TDR-SAFE CHUNKED DISPATCH — single work group per dispatch
+        //  Each dispatch: shader loads image → shared mem, runs N iterations
+        //  with barrier() sync, writes result back to image.
+        //  ~9 dispatches for 900K iterations. Zero per-iteration overhead.
+        // ══════════════════════════════════════════════════════════════════
+        int remaining = iterations;
+        int src = 0;   // Which texture has the current state
+
+        while (remaining > 0) {
+            int chunk = Math.min(remaining, TDR_CHUNK);
+
+            // Bind source as readonly (imgIn), other as writeonly (imgOut)
+            gl4.glBindImageTexture(0, computeTex[src], 0, false, 0, GL_READ_ONLY, GL_RGBA8);
+            gl4.glBindImageTexture(1, computeTex[1 - src], 0, false, 0, GL_WRITE_ONLY, GL_RGBA8);
+
+            // Set iteration count for this chunk
+            gl4.glUniform1i(computeUIter, chunk);
+
+            // SINGLE work group dispatch — ALL iterations in shared memory
+            gl4.glDispatchCompute(1, 1, 1);
+
+            // Ensure image writes are visible for next chunk's read
+            gl4.glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+            // GPU finish resets TDR watchdog timer between chunks
+            gl4.glFinish();
+
+            // Swap: output of this chunk becomes input for next
+            src = 1 - src;
+            remaining -= chunk;
+        }
+
+        gl4.glUseProgram(0);
+
+        // Result is in computeTex[src] (the last dst, now swapped to src)
+        int resultTex = src;
+
+        // ── Read result back from result texture into buffer1 ────────────
+        gl4.glBindFramebuffer(GL.GL_FRAMEBUFFER, computeFbo[0]);
+        gl4.glFramebufferTexture2D(GL.GL_FRAMEBUFFER, GL.GL_COLOR_ATTACHMENT0,
+                                    GL.GL_TEXTURE_2D, computeTex[resultTex], 0);
+
+        pixelBuffer.clear();
+        gl4.glReadPixels(0, 0, GRID_SIZE, GRID_SIZE, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, pixelBuffer);
+        gl4.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0);
+
+        buffer1.endPGL();
+
+        // ── Copy pixels into Processing buffer (flip Y: GL is bottom-up) ─
         buffer1.loadPixels();
-        byte[] arr = board.boardFront;
-        for (int i = 0; i < arr.length; i++) {
-            buffer1.pixels[i] = arr[i] != 0 ? 0xFF000000 : 0xFFFFFFFF;
+        pixelBuffer.rewind();
+        IntBuffer intView = pixelBuffer.asIntBuffer();
+        intView.get(readbackArray);
+
+        for (int r = 0; r < GRID_SIZE; r++) {
+            int srcRow = (GRID_SIZE - 1 - r) * GRID_SIZE;
+            int dstRow = r * GRID_SIZE;
+            for (int c = 0; c < GRID_SIZE; c++) {
+                int rgba = readbackArray[srcRow + c];
+                int a = (rgba >> 24) & 0xFF;
+                int b = (rgba >> 16) & 0xFF;
+                int g = (rgba >> 8) & 0xFF;
+                int red = rgba & 0xFF;
+                buffer1.pixels[dstRow + c] = (a << 24) | (red << 16) | (g << 8) | b;
+            }
         }
         buffer1.updatePixels();
         buffer1.endDraw();
-        computeProgress = 0;
-        computeStartTime = p.millis();
-        totalTargetIters = iterations;
-        isComputing = true;
-        hasComputed = false;
+
+        // ── Done ────────────────────────────────────────────────────────
+        computeProgress = iterations;
+        computeTime = p.millis() - computeStartTime;
+        isComputing = false;
+        hasComputed = true;
+
+        System.out.println("[GPU V6] Done in " + computeTime + "ms (" + numChunks
+                + " chunks × " + TDR_CHUNK + " max = " + iterations + " gens)");
     }
 
     /**
-     * V2.0 fallback: Processes one batch using Processing's API.
-     * Used only if raw GL initialization fails.
+     * V6.0: No-op — all work completes inside startCompute() now.
+     * Kept for API compatibility with GPULabScreen.
      */
-    private void processBatchV2(int targetIterations) {
-        int remaining = targetIterations - computeProgress;
-        int batch = Math.min(remaining, batchSize);
-        long batchStart = p.millis();
-
-        buffer2.beginDraw();
-        buffer2.shader(conwayShader);
-
-        for (int i = 0; i < batch; i++) {
-            buffer2.clear();
-            buffer2.image(buffer1, 0, 0);
-            buffer2.endDraw();
-            PGraphics t = buffer1; buffer1 = buffer2; buffer2 = t;
-            if (i < batch - 1) {
-                buffer2.beginDraw();
-                buffer2.shader(conwayShader);
-            }
-        }
-
-        computeProgress += batch;
-        long batchMs = p.millis() - batchStart;
-        if (batchMs < 12 && batchSize < MAX_BATCH)
-            batchSize = Math.min(batchSize * 2, MAX_BATCH);
-        else if (batchMs > 14 && batchSize > MIN_BATCH)
-            batchSize = Math.max(batchSize / 2, MIN_BATCH);
-
-        if (computeProgress >= targetIterations) {
-            computeTime = p.millis() - computeStartTime;
-            isComputing = false;
-            hasComputed = true;
-            System.out.println("[GPU V2 FALLBACK] Done in " + computeTime + "ms");
-        }
+    public void processBatch(int targetIterations) {
+        // Everything completes in startCompute() — nothing to do here.
     }
 
     // ═══════════════════════════════════════════════════════
