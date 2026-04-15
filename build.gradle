@@ -1,0 +1,61 @@
+plugins {
+    id 'application'
+    id 'org.openjfx.javafxplugin' version '0.1.0'
+}
+
+group = 'game.of.life.on.gpu'
+version = '7.0'
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+javafx {
+    version = '21.0.2'
+    modules = ['javafx.controls', 'javafx.fxml']
+}
+
+dependencies {
+    // JOGL for direct GL4 compute shader access
+    implementation 'org.jogamp.jogl:jogl-all-main:2.5.2'
+    implementation 'org.jogamp.gluegen:gluegen-rt-main:2.5.2'
+}
+
+application {
+    mainClass = 'game.of.life.on.gpu.App'
+    applicationDefaultJvmArgs = [
+        '--add-exports', 'javafx.graphics/com.sun.javafx.sg.prism=ALL-UNNAMED',
+        '--add-opens', 'javafx.graphics/com.sun.javafx.tk=ALL-UNNAMED',
+        '--enable-native-access=ALL-UNNAMED'
+    ]
+}
+
+// Copy shader files to build output so they're accessible at runtime
+processResources {
+    from('data') {
+        include '*.glsl'
+        into 'shaders'
+    }
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src/main/java']
+        }
+        resources {
+            srcDirs = ['src/main/resources']
+        }
+    }
+}
+
+// Ensure console output works properly
+run {
+    standardInput = System.in
+}

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.scene.layout.*?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.canvas.*?>
+<?import javafx.geometry.Insets?>
+
+<StackPane xmlns:fx="http://javafx.com/fxml"
+           fx:controller="game.of.life.on.gpu.ui.MenuController"
+           stylesheets="@../css/dark-theme.css">
+
+    <!-- Layer 1: Animated grid background -->
+    <Canvas fx:id="gridCanvas"/>
+
+    <!-- Layer 2: Dark overlay for readability -->
+    <Pane styleClass="dark-overlay" mouseTransparent="true"/>
+
+    <!-- Layer 3: Particle canvas -->
+    <Canvas fx:id="particleCanvas" mouseTransparent="true"/>
+
+    <!-- Layer 4: Content -->
+    <VBox alignment="CENTER" spacing="6" maxWidth="400">
+        <padding><Insets top="0" right="40" bottom="80" left="40"/></padding>
+
+        <!-- Title -->
+        <Label text="GAME OF LIFE" styleClass="hero-title"/>
+        <Label text="V7.0" styleClass="version-badge"/>
+
+        <!-- Accent separator -->
+        <Separator styleClass="accent-separator"/>
+
+        <!-- Subtitle -->
+        <Label text="GPU-ACCELERATED  ·  CONWAY'S CELLULAR AUTOMATON  ·  OPENGL"
+               styleClass="subtitle" wrapText="true" alignment="CENTER"/>
+
+        <Region prefHeight="28"/>
+
+        <!-- Navigation buttons -->
+        <Button fx:id="btnSimulation" text="ENTER SIMULATION"
+                styleClass="neon-button" onAction="#goSimulation"/>
+        <Button fx:id="btnTheory" text="BACKGROUND &amp; THEORY"
+                styleClass="neon-button, purple" onAction="#goTheory"/>
+        <Button fx:id="btnGPULab" text="GPU COMPUTE LAB"
+                styleClass="neon-button, magenta" onAction="#goGPULab"/>
+    </VBox>
+
+    <!-- Layer 5: Status bar -->
+    <Label fx:id="fpsLabel" styleClass="status-bar"
+           StackPane.alignment="BOTTOM_CENTER"/>
+</StackPane>
