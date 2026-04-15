@@ -8,6 +8,7 @@ version = '7.0'
 
 repositories {
     mavenCentral()
+    maven { url 'https://jogamp.org/deployment/maven' }
 }
 
 java {
@@ -22,10 +23,9 @@ javafx {
 }
 
 dependencies {
-    // TODO: Add JOGL when wiring GPU compute shader
-    // Requires jogamp repository: maven { url 'https://jogamp.org/deployment/maven' }
-    // implementation 'org.jogamp.jogl:jogl-all-main:2.5.2'
-    // implementation 'org.jogamp.gluegen:gluegen-rt-main:2.5.2'
+    // JOGL for direct GL4 compute shader access
+    implementation 'org.jogamp.jogl:jogl-all-main:2.4.0'
+    implementation 'org.jogamp.gluegen:gluegen-rt-main:2.4.0'
 }
 
 application {

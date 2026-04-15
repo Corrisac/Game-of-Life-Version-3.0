@@ -189,45 +189,28 @@ public class GPULabController {
 
         if (gpuBackend != null) {
             gpuBackend.startCompute(board, iterations);
-            isComputing = true;
-            progressBox.setVisible(true);
-            resultCanvas.setVisible(false);
-            resultBanner.setVisible(false);
-            placeholderBox.setVisible(false);
-            progressBar.setProgress(0);
-        } else {
-            // Fallback: CPU compute
-            Grid cpuGrid = new Grid(SimulationRules.GRID_SIZE, SimulationRules.GRID_SIZE);
-            System.arraycopy(board.boardFront, 0, cpuGrid.boardFront, 0, board.boardFront.length);
-            long start = System.currentTimeMillis();
-            for (int i = 0; i < iterations; i++) cpuGrid.updateToNextGeneration();
-            long elapsed = System.currentTimeMillis() - start;
 
-            hasResult = true;
-            progressBox.setVisible(false);
-            resultCanvas.setVisible(true);
-            resultBanner.setVisible(true);
-            placeholderBox.setVisible(false);
-            resultLabel.setText("✓  " + elapsed + "ms (CPU)  ·  "
-                + String.format("%,d", iterations) + " GEN  ·  CONWAY");
-
-            // Draw result
-            double w = resultPane.getWidth();
-            double h = resultPane.getHeight();
-            resultCanvas.setWidth(w);
-            resultCanvas.setHeight(h);
-            GraphicsContext gc = resultCanvas.getGraphicsContext2D();
-            gc.setFill(Color.web("#0A0F19"));
-            gc.fillRect(0, 0, w, h);
-            int gs = SimulationRules.GRID_SIZE;
-            double cellSize = Math.min(w, h) / gs;
-            double ox = (w - gs * cellSize) / 2;
-            double oy = (h - gs * cellSize) / 2;
-            for (int r = 0; r < gs; r++)
-                for (int c = 0; c < gs; c++) {
-                    gc.setFill(cpuGrid.getCellState(r, c) ? Color.web("#00FFE0") : Color.web("#121826"));
-                    gc.fillRect(ox + c * cellSize, oy + r * cellSize, cellSize, cellSize);
-                }
+            // GPU path completes synchronously — check immediately
+            if (!gpuBackend.isComputing()) {
+                // Already done (GPU was fast)
+                hasResult = true;
+                String mode = gpuBackend.isGPUAvailable() ? "GPU" : "CPU";
+                resultLabel.setText("✓  " + gpuBackend.getComputeTime() + "ms (" + mode + ")  ·  "
+                    + String.format("%,d", iterations) + " GEN  ·  CONWAY");
+                progressBox.setVisible(false);
+                resultCanvas.setVisible(true);
+                resultBanner.setVisible(true);
+                placeholderBox.setVisible(false);
+                drawResultGrid();
+            } else {
+                // CPU fallback — show progress, processBatch() handles the rest
+                isComputing = true;
+                progressBox.setVisible(true);
+                resultCanvas.setVisible(false);
+                resultBanner.setVisible(false);
+                placeholderBox.setVisible(false);
+                progressBar.setProgress(0);
+            }
         }
     }
 

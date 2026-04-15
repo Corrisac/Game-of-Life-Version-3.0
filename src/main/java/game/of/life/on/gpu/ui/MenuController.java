@@ -55,8 +55,10 @@ public class MenuController {
     public void update(double dt, double fps) {
         frameCount++;
 
+        if (gridCanvas.getScene() == null) return; // Not attached yet
         double w = gridCanvas.getScene().getWidth();
         double h = gridCanvas.getScene().getHeight();
+        if (w <= 0 || h <= 0) return;
 
         // Resize canvases to match window
         gridCanvas.setWidth(w);

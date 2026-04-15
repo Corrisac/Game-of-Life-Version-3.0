@@ -112,7 +112,7 @@ case "$( uname )" in                #(
   NONSTOP* )        nonstop=true ;;
 esac
 
-CLASSPATH=$APP_HOME/lib/Game-Of-Life-On-GPU-7.0.jar:$APP_HOME/lib/javafx-fxml-21.0.2-win.jar:$APP_HOME/lib/javafx-controls-21.0.2-win.jar:$APP_HOME/lib/javafx-graphics-21.0.2-win.jar:$APP_HOME/lib/javafx-base-21.0.2-win.jar
+CLASSPATH=$APP_HOME/lib/Game-Of-Life-On-GPU-7.0.jar:$APP_HOME/lib/jogl-all-main-2.4.0.jar:$APP_HOME/lib/gluegen-rt-main-2.4.0.jar:$APP_HOME/lib/javafx-fxml-21.0.2-win.jar:$APP_HOME/lib/javafx-controls-21.0.2-win.jar:$APP_HOME/lib/jogl-all-2.4.0.jar:$APP_HOME/lib/jogl-all-2.4.0-natives-android-aarch64.jar:$APP_HOME/lib/jogl-all-2.4.0-natives-linux-amd64.jar:$APP_HOME/lib/jogl-all-2.4.0-natives-linux-armv6hf.jar:$APP_HOME/lib/jogl-all-2.4.0-natives-linux-aarch64.jar:$APP_HOME/lib/jogl-all-2.4.0-natives-macosx-universal.jar:$APP_HOME/lib/jogl-all-2.4.0-natives-windows-amd64.jar:$APP_HOME/lib/gluegen-rt-2.4.0.jar:$APP_HOME/lib/gluegen-rt-2.4.0-natives-android-aarch64.jar:$APP_HOME/lib/gluegen-rt-2.4.0-natives-linux-amd64.jar:$APP_HOME/lib/gluegen-rt-2.4.0-natives-linux-armv6hf.jar:$APP_HOME/lib/gluegen-rt-2.4.0-natives-linux-aarch64.jar:$APP_HOME/lib/gluegen-rt-2.4.0-natives-macosx-universal.jar:$APP_HOME/lib/gluegen-rt-2.4.0-natives-windows-amd64.jar:$APP_HOME/lib/antlr-2.7.7.jar:$APP_HOME/lib/javafx-graphics-21.0.2-win.jar:$APP_HOME/lib/javafx-base-21.0.2-win.jar
 
 
 # Determine the Java command to use to start the JVM.
