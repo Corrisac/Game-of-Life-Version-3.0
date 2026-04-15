@@ -22,9 +22,10 @@ javafx {
 }
 
 dependencies {
-    // JOGL for direct GL4 compute shader access
-    implementation 'org.jogamp.jogl:jogl-all-main:2.5.2'
-    implementation 'org.jogamp.gluegen:gluegen-rt-main:2.5.2'
+    // TODO: Add JOGL when wiring GPU compute shader
+    // Requires jogamp repository: maven { url 'https://jogamp.org/deployment/maven' }
+    // implementation 'org.jogamp.jogl:jogl-all-main:2.5.2'
+    // implementation 'org.jogamp.gluegen:gluegen-rt-main:2.5.2'
 }
 
 application {
@@ -42,6 +43,10 @@ processResources {
         include '*.glsl'
         into 'shaders'
     }
+}
+
+compileJava {
+    options.encoding = 'UTF-8'
 }
 
 sourceSets {

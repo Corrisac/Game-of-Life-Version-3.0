@@ -1,5 +1,6 @@
 package game.of.life.on.gpu.ui;
 
+import game.of.life.on.gpu.App;
 import game.of.life.on.gpu.engine.Grid;
 import game.of.life.on.gpu.engine.PatternLibrary;
 import game.of.life.on.gpu.engine.SimulationRules;

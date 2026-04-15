@@ -11,5 +11,6 @@
     "java.project.sourcePaths": [
         "src/game/of/life/on/gpu"
     ],
-    "java.project.outputPath": "build/classes"
+    "java.project.outputPath": "build/classes",
+    "java.configuration.updateBuildConfiguration": "interactive"
 }

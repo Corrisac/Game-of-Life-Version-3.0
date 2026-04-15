@@ -2,8 +2,12 @@ package game.of.life.on.gpu;
 
 import game.of.life.on.gpu.engine.Grid;
 import game.of.life.on.gpu.engine.SimulationRules;
+import game.of.life.on.gpu.gpu.GPUBackend;
+import game.of.life.on.gpu.ui.GPULabController;
 import game.of.life.on.gpu.ui.MenuController;
 import game.of.life.on.gpu.ui.ScreenManager;
+import game.of.life.on.gpu.ui.SimulationController;
+import game.of.life.on.gpu.ui.TheoryController;
 import javafx.animation.AnimationTimer;
 import javafx.application.Application;
 import javafx.fxml.FXMLLoader;
@@ -14,46 +18,48 @@ import javafx.stage.Stage;
 
 /**
  * App V7.0 — JavaFX entry point.
- * Replaces the Processing PApplet with a proper JavaFX Application.
+ * Manages all screens, shared game state, GPU backend, and the main game loop.
  */
 public class App extends Application {
 
-    // Shared game state
+    // Shared state
     private Grid gameBoard;
+    private GPUBackend gpuBackend;
     private ScreenManager screenManager;
 
-    // Screen controllers (initialized lazily)
+    // Screens & controllers
+    private Parent menuRoot, theoryRoot, simRoot, gpuLabRoot;
     private MenuController menuController;
-    private Parent menuRoot;
+    private TheoryController theoryController;
+    private SimulationController simController;
+    private GPULabController gpuLabController;
+
+    // Currently active screen index (0=Menu, 1=Theory, 2=Sim, 3=Lab)
+    private int activeScreen = 0;
 
     // Frame timing
     private long lastFrameNanos = 0;
     private double fps = 60;
-    private int frameCount = 0;
 
     @Override
     public void start(Stage stage) throws Exception {
-        // Initialize game state
+        // Initialize shared state
         gameBoard = new Grid(SimulationRules.GRID_SIZE, SimulationRules.GRID_SIZE);
-
-        // Initialize screen manager
+        gpuBackend = new GPUBackend();
         screenManager = new ScreenManager();
 
-        // Load menu screen
-        FXMLLoader menuLoader = new FXMLLoader(
-            getClass().getResource("/fxml/MenuScreen.fxml"));
-        menuRoot = menuLoader.load();
-        menuController = menuLoader.getController();
-        menuController.init(this);
+        // Load all screens
+        loadMenuScreen();
+        loadTheoryScreen();
+        loadSimulationScreen();
+        loadGPULabScreen();
 
-        // Show initial screen
+        // Show menu first
         screenManager.showImmediate(menuRoot);
 
-        // Create scene
+        // Create scene with CSS theme
         Scene scene = new Scene(screenManager.getContainer(), 1280, 720);
         scene.setFill(Color.web("#0A0F19"));
-
-        // Apply CSS theme
         scene.getStylesheets().add(
             getClass().getResource("/css/dark-theme.css").toExternalForm());
 
@@ -64,43 +70,77 @@ public class App extends Application {
         stage.setMinHeight(500);
         stage.show();
 
-        // Start game loop
+        // Main game loop
         new AnimationTimer() {
             @Override
             public void handle(long now) {
-                if (lastFrameNanos == 0) {
-                    lastFrameNanos = now;
-                    return;
-                }
-
+                if (lastFrameNanos == 0) { lastFrameNanos = now; return; }
                 double dt = (now - lastFrameNanos) / 1_000_000_000.0;
-                dt = Math.max(0.001, Math.min(dt, 0.1));  // Clamp 1ms..100ms
+                dt = Math.max(0.001, Math.min(dt, 0.1));
                 lastFrameNanos = now;
-                frameCount++;
-
-                // Smooth FPS calculation
                 fps = fps * 0.95 + (1.0 / dt) * 0.05;
 
-                // Update active screen
-                if (menuController != null) {
-                    menuController.update(dt, fps);
+                // Update active screen only
+                switch (activeScreen) {
+                    case 0 -> menuController.update(dt, fps);
+                    case 2 -> simController.update(dt, fps);
+                    case 3 -> gpuLabController.update(dt, fps);
+                    // Theory screen (1) is static — no per-frame updates needed
                 }
             }
         }.start();
     }
 
-    /** Navigate to a screen by index (0=Menu, 1=Theory, 2=Sim, 3=Lab). */
-    public void navigateTo(int screen) {
-        if (screenManager.isTransitioning()) return;
+    // ── Screen Loading ────────────────────────────────────
 
-        switch (screen) {
-            case 0 -> screenManager.transitionTo(menuRoot);
-            // TODO: Phases 4-6 will add Theory, Simulation, GPULab screens
-            default -> System.out.println("[App] Screen " + screen + " not yet implemented");
-        }
+    private void loadMenuScreen() throws Exception {
+        FXMLLoader loader = new FXMLLoader(getClass().getResource("/fxml/MenuScreen.fxml"));
+        menuRoot = loader.load();
+        menuController = loader.getController();
+        menuController.init(this);
     }
 
+    private void loadTheoryScreen() throws Exception {
+        FXMLLoader loader = new FXMLLoader(getClass().getResource("/fxml/TheoryScreen.fxml"));
+        theoryRoot = loader.load();
+        theoryController = loader.getController();
+        theoryController.init(this);
+    }
+
+    private void loadSimulationScreen() throws Exception {
+        FXMLLoader loader = new FXMLLoader(getClass().getResource("/fxml/SimulationScreen.fxml"));
+        simRoot = loader.load();
+        simController = loader.getController();
+        simController.init(this);
+    }
+
+    private void loadGPULabScreen() throws Exception {
+        FXMLLoader loader = new FXMLLoader(getClass().getResource("/fxml/GPULabScreen.fxml"));
+        gpuLabRoot = loader.load();
+        gpuLabController = loader.getController();
+        gpuLabController.init(this);
+    }
+
+    // ── Navigation ────────────────────────────────────────
+
+    /** Navigate to screen by index: 0=Menu, 1=Theory, 2=Sim, 3=Lab */
+    public void navigateTo(int screen) {
+        if (screenManager.isTransitioning()) return;
+        activeScreen = screen;
+        Parent target = switch (screen) {
+            case 0 -> menuRoot;
+            case 1 -> theoryRoot;
+            case 2 -> simRoot;
+            case 3 -> gpuLabRoot;
+            default -> menuRoot;
+        };
+        screenManager.transitionTo(target);
+    }
+
+    // ── Shared State Accessors ────────────────────────────
+
     public Grid getGameBoard() { return gameBoard; }
+    public GPUBackend getGPUBackend() { return gpuBackend; }
 
     public static void main(String[] args) {
         launch(args);

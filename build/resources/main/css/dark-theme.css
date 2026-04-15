@@ -1,0 +1,300 @@
+/* ═══════════════════════════════════════════════════════════════
+ *  GAME OF LIFE V7 — DARK THEME
+ *  One file controls the entire visual identity.
+ * ═══════════════════════════════════════════════════════════════ */
+
+/* ── Root Variables ────────────────────────────────────────────── */
+.root {
+    -fx-bg:        #0A0F19;
+    -fx-bg-card:   rgba(255,255,255,0.04);
+    -fx-bg-bar:    rgba(10,15,25,0.88);
+    -fx-cyan:      #00FFE0;
+    -fx-magenta:   #FF00AA;
+    -fx-purple:    #7B61FF;
+    -fx-orange:    #FF9F43;
+    -fx-red:       #FF4757;
+    -fx-green:     #2ED573;
+    -fx-text:      #D8DCE2;
+    -fx-text-dim:  rgba(255,255,255,0.35);
+    -fx-border-subtle: rgba(255,255,255,0.07);
+
+    -fx-font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    -fx-font-size: 14px;
+    -fx-background-color: #0A0F19;
+}
+
+/* ── Scroll Pane ───────────────────────────────────────────────── */
+.scroll-pane {
+    -fx-background: transparent;
+    -fx-background-color: transparent;
+}
+.scroll-pane > .viewport {
+    -fx-background-color: transparent;
+}
+.scroll-bar {
+    -fx-background-color: transparent;
+}
+.scroll-bar .thumb {
+    -fx-background-color: rgba(0,255,224,0.3);
+    -fx-background-radius: 4;
+}
+.scroll-bar .thumb:hover {
+    -fx-background-color: rgba(0,255,224,0.5);
+}
+.scroll-bar .track, .scroll-bar .increment-button,
+.scroll-bar .decrement-button, .scroll-bar .increment-arrow,
+.scroll-bar .decrement-arrow {
+    -fx-background-color: transparent;
+    -fx-padding: 0;
+}
+
+/* ── Neon Button ───────────────────────────────────────────────── */
+.neon-button {
+    -fx-background-color: rgba(255,255,255,0.03);
+    -fx-border-color: #00FFE0;
+    -fx-border-width: 1;
+    -fx-border-radius: 24;
+    -fx-background-radius: 24;
+    -fx-text-fill: white;
+    -fx-font-size: 14px;
+    -fx-font-weight: bold;
+    -fx-padding: 14 40;
+    -fx-cursor: hand;
+    -fx-min-width: 260;
+    -fx-alignment: center;
+}
+.neon-button:hover {
+    -fx-background-color: rgba(0,255,224,0.08);
+    -fx-effect: dropshadow(gaussian, #00FFE080, 18, 0.3, 0, 0);
+    -fx-scale-x: 1.03;
+    -fx-scale-y: 1.03;
+}
+.neon-button:pressed {
+    -fx-background-color: rgba(0,255,224,0.18);
+    -fx-scale-x: 0.97;
+    -fx-scale-y: 0.97;
+}
+
+/* ── Button Color Variants ─────────────────────────────────────── */
+.neon-button.purple {
+    -fx-border-color: #7B61FF;
+}
+.neon-button.purple:hover {
+    -fx-background-color: rgba(123,97,255,0.08);
+    -fx-effect: dropshadow(gaussian, #7B61FF80, 18, 0.3, 0, 0);
+}
+.neon-button.purple:pressed {
+    -fx-background-color: rgba(123,97,255,0.18);
+}
+
+.neon-button.magenta {
+    -fx-border-color: #FF00AA;
+}
+.neon-button.magenta:hover {
+    -fx-background-color: rgba(255,0,170,0.08);
+    -fx-effect: dropshadow(gaussian, #FF00AA80, 18, 0.3, 0, 0);
+}
+.neon-button.magenta:pressed {
+    -fx-background-color: rgba(255,0,170,0.18);
+}
+
+.neon-button.orange {
+    -fx-border-color: #FF9F43;
+}
+.neon-button.orange:hover {
+    -fx-background-color: rgba(255,159,67,0.08);
+    -fx-effect: dropshadow(gaussian, #FF9F4380, 18, 0.3, 0, 0);
+}
+
+.neon-button.red {
+    -fx-border-color: #FF4757;
+}
+.neon-button.red:hover {
+    -fx-background-color: rgba(255,71,87,0.08);
+    -fx-effect: dropshadow(gaussian, #FF475780, 18, 0.3, 0, 0);
+}
+
+.neon-button.green {
+    -fx-border-color: #2ED573;
+}
+.neon-button.green:hover {
+    -fx-background-color: rgba(46,213,115,0.08);
+    -fx-effect: dropshadow(gaussian, #2ED57380, 18, 0.3, 0, 0);
+}
+
+/* Small button variant for toolbars */
+.neon-button.small {
+    -fx-font-size: 12px;
+    -fx-padding: 8 18;
+    -fx-min-width: 0;
+    -fx-border-radius: 16;
+    -fx-background-radius: 16;
+}
+
+/* ── Glass Card ────────────────────────────────────────────────── */
+.glass-card {
+    -fx-background-color: rgba(255,255,255,0.035);
+    -fx-border-color: rgba(255,255,255,0.06);
+    -fx-border-width: 1;
+    -fx-border-radius: 12;
+    -fx-background-radius: 12;
+    -fx-padding: 20 24;
+}
+
+/* ── Toolbar ───────────────────────────────────────────────────── */
+.toolbar {
+    -fx-background-color: rgba(10,15,25,0.9);
+    -fx-border-color: rgba(0,255,224,0.12);
+    -fx-border-width: 0 0 1 0;
+    -fx-padding: 8 20;
+    -fx-alignment: center-left;
+}
+.toolbar.bottom {
+    -fx-border-width: 1 0 0 0;
+    -fx-alignment: center;
+}
+
+/* ── Sidebar ───────────────────────────────────────────────────── */
+.sidebar {
+    -fx-background-color: rgba(10,15,25,0.94);
+    -fx-border-color: rgba(255,255,255,0.07);
+    -fx-border-width: 0 1 0 0;
+    -fx-padding: 16;
+    -fx-spacing: 12;
+}
+
+/* ── Typography ────────────────────────────────────────────────── */
+.hero-title {
+    -fx-text-fill: white;
+    -fx-font-size: 54px;
+    -fx-font-weight: bold;
+    -fx-effect: dropshadow(gaussian, #00FFE040, 20, 0.4, 0, 0);
+}
+
+.version-badge {
+    -fx-text-fill: #00FFE0;
+    -fx-font-size: 11px;
+    -fx-opacity: 0.7;
+}
+
+.subtitle {
+    -fx-text-fill: #00FFE0;
+    -fx-font-size: 12px;
+    -fx-opacity: 0.55;
+}
+
+.section-title {
+    -fx-text-fill: #00FFE0;
+    -fx-font-size: 15px;
+    -fx-font-weight: bold;
+    -fx-opacity: 0.85;
+}
+
+.body-text {
+    -fx-text-fill: #C8CCD2;
+    -fx-font-size: 13px;
+    -fx-line-spacing: 3;
+}
+
+.stats-text {
+    -fx-text-fill: rgba(255,255,255,0.5);
+    -fx-font-size: 14px;
+    -fx-font-family: 'JetBrains Mono', 'Consolas', monospace;
+}
+
+.status-bar {
+    -fx-text-fill: rgba(255,255,255,0.2);
+    -fx-font-size: 10px;
+    -fx-padding: 0 0 12 0;
+}
+
+.toolbar-title {
+    -fx-text-fill: white;
+    -fx-font-size: 18px;
+    -fx-font-weight: bold;
+    -fx-opacity: 0.85;
+}
+
+.sidebar-title {
+    -fx-text-fill: white;
+    -fx-font-size: 17px;
+    -fx-font-weight: bold;
+    -fx-alignment: center;
+}
+
+/* ── Text Input ────────────────────────────────────────────────── */
+.neon-input {
+    -fx-background-color: rgba(255,255,255,0.04);
+    -fx-border-color: rgba(255,255,255,0.12);
+    -fx-border-width: 1;
+    -fx-border-radius: 8;
+    -fx-background-radius: 8;
+    -fx-text-fill: white;
+    -fx-prompt-text-fill: rgba(255,255,255,0.25);
+    -fx-font-size: 16px;
+    -fx-padding: 10 14;
+    -fx-alignment: center;
+    -fx-font-family: 'JetBrains Mono', 'Consolas', monospace;
+}
+.neon-input:focused {
+    -fx-border-color: #00FFE0;
+    -fx-background-color: rgba(0,255,224,0.04);
+    -fx-effect: dropshadow(gaussian, #00FFE040, 10, 0.2, 0, 0);
+}
+
+/* ── Accent Line / Separator ───────────────────────────────────── */
+.accent-separator {
+    -fx-border-color: transparent transparent rgba(0,255,224,0.25) transparent;
+    -fx-border-width: 0 0 1 0;
+    -fx-max-width: 300;
+    -fx-padding: 6 0;
+}
+
+/* ── Progress Bar ──────────────────────────────────────────────── */
+.progress-bar {
+    -fx-accent: #00FFE0;
+    -fx-background-color: rgba(30,38,50,1);
+    -fx-background-radius: 8;
+}
+.progress-bar > .bar {
+    -fx-background-color: #00FFE0;
+    -fx-background-radius: 8;
+    -fx-background-insets: 0;
+    -fx-effect: dropshadow(gaussian, #00FFE060, 12, 0.3, 0, 0);
+}
+.progress-bar > .track {
+    -fx-background-color: rgba(30,38,50,1);
+    -fx-background-radius: 8;
+}
+
+/* ── Back Button ───────────────────────────────────────────────── */
+.back-button {
+    -fx-background-color: #E74C3C;
+    -fx-text-fill: white;
+    -fx-font-size: 13px;
+    -fx-font-weight: bold;
+    -fx-padding: 8 24;
+    -fx-background-radius: 19;
+    -fx-cursor: hand;
+}
+.back-button:hover {
+    -fx-background-color: #F5594B;
+    -fx-effect: dropshadow(gaussian, #E74C3C60, 10, 0.2, 0, 0);
+}
+
+/* ── Overlay (for menu background) ─────────────────────────────── */
+.dark-overlay {
+    -fx-background-color: rgba(10,15,25,0.67);
+}
+
+/* ── Status indicators ─────────────────────────────────────────── */
+.status-paused {
+    -fx-text-fill: #FF4757;
+    -fx-font-size: 15px;
+    -fx-font-weight: bold;
+}
+.status-running {
+    -fx-text-fill: #2ED573;
+    -fx-font-size: 15px;
+    -fx-font-weight: bold;
+}

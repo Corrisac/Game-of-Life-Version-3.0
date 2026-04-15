@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.scene.layout.*?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.canvas.*?>
+
+<BorderPane xmlns:fx="http://javafx.com/fxml"
+            fx:controller="game.of.life.on.gpu.ui.SimulationController"
+            stylesheets="@../css/dark-theme.css"
+            style="-fx-background-color: #0A0F19;">
+
+    <!-- Top toolbar -->
+    <top>
+        <HBox styleClass="toolbar" spacing="12" alignment="CENTER_LEFT">
+            <Label text="INTERACTIVE SIMULATION" styleClass="toolbar-title"/>
+            <Region HBox.hgrow="ALWAYS"/>
+            <Label fx:id="statsLabel" styleClass="stats-text"/>
+            <Region prefWidth="16"/>
+            <Label fx:id="statusLabel" styleClass="status-paused" text="⏸ PAUSED"/>
+        </HBox>
+    </top>
+
+    <!-- Center: Grid canvas in a resizable pane -->
+    <center>
+        <StackPane fx:id="gridPane" style="-fx-background-color: #0A0F19;">
+            <Canvas fx:id="gridCanvas"/>
+            <!-- Analytics HUD overlay (top-left, initially hidden) -->
+            <VBox fx:id="hudOverlay" visible="false" maxWidth="240" maxHeight="180"
+                  StackPane.alignment="TOP_LEFT" styleClass="glass-card"
+                  style="-fx-padding: 12; -fx-spacing: 4;"
+                  mouseTransparent="true">
+                <Label fx:id="hudPopLabel" style="-fx-text-fill: white; -fx-font-size: 13px;"/>
+                <Label fx:id="hudPeakLabel" style="-fx-text-fill: white; -fx-font-size: 13px;"/>
+                <Label fx:id="hudBornLabel" style="-fx-text-fill: #00FFE0; -fx-font-size: 13px;"/>
+                <Label fx:id="hudDiedLabel" style="-fx-text-fill: #FF4757; -fx-font-size: 13px;"/>
+                <Label fx:id="hudGpsLabel" style="-fx-text-fill: #FF9F43; -fx-font-size: 13px;"/>
+                <Label fx:id="hudZoomLabel" style="-fx-text-fill: rgba(255,255,255,0.5); -fx-font-size: 13px;"/>
+                <Canvas fx:id="sparklineCanvas" width="210" height="50"/>
+            </VBox>
+        </StackPane>
+    </center>
+
+    <!-- Bottom toolbar with action buttons -->
+    <bottom>
+        <HBox styleClass="toolbar, bottom" spacing="8" alignment="CENTER">
+            <Button fx:id="btnPause" text="⏯ PLAY" styleClass="neon-button, small, green"
+                    onAction="#togglePause"/>
+            <Button text="🗑 CLEAR" styleClass="neon-button, small, red"
+                    onAction="#clearGrid"/>
+            <Button fx:id="btnBrush" text="✏ BRUSH: 1" styleClass="neon-button, small"
+                    onAction="#cycleBrush"/>
+            <Button text="⬡ GLIDER" styleClass="neon-button, small"
+                    onAction="#spawnGlider"/>
+            <Button text="⚙ GUN" styleClass="neon-button, small"
+                    onAction="#spawnGun"/>
+            <Button fx:id="btnRule" text="CONWAY" styleClass="neon-button, small, purple"
+                    onAction="#cycleRule"/>
+            <Button fx:id="btnSpeed" text="1x" styleClass="neon-button, small, orange"
+                    onAction="#cycleSpeed"/>
+            <Button fx:id="btnHud" text="HUD" styleClass="neon-button, small"
+                    onAction="#toggleHud"/>
+            <Button fx:id="btnHeat" text="HEAT" styleClass="neon-button, small"
+                    onAction="#toggleHeatmap"/>
+            <Region HBox.hgrow="ALWAYS"/>
+            <Button text="← MENU" styleClass="neon-button, small, red"
+                    onAction="#goMenu"/>
+        </HBox>
+    </bottom>
+</BorderPane>
