@@ -1,0 +1,425 @@
+================================================================================
+CODEBASE REVIEW — Game-of-Life-Version-3.0
+================================================================================
+
+
+--------------------------------------------------------------------------------
+1. Grid.java — Logic / Runtime / Maintainability
+--------------------------------------------------------------------------------
+
+1.1  setCellState Does Not Reset Age on Kill  (Lines 67–73)  [MEDIUM]
+---------------------------------------------------------------------
+Code:
+    boardFront[idx] = (byte)(isAlive ? 1 : 0);
+    if (isAlive && ageFront[idx] == 0)
+        ageFront[idx] = 1;
+
+When isAlive = false, ageFront[idx] is never zeroed. If a cell is killed by
+setCellState(r,c,false) and then later re-born (whether via simulation or
+setCellState(r,c,true) again), the stale positive age means the guard
+"if (isAlive && ageFront[idx] == 0)" fails and the age won't be reset to 1.
+The cell will display with an incorrect (old) heatmap colour from the moment
+it reappears. updateToNextGeneration() correctly resets age to 0 on death
+(line 113), but the public setter does not.
+
+Fix: Add `else { ageFront[idx] = 0; }` to reset age when a cell is killed
+via the setter.
+
+
+1.2  clearBoard() Leaves boardBack Dirty  (Lines 169–179)  [LOW / LATENT]
+--------------------------------------------------------------------------
+clearBoard() wipes boardFront and ageFront but leaves boardBack and ageBack
+with whatever values remain from a previous simulation run. Since
+updateToNextGeneration() writes every cell before swapping this normally
+doesn't matter. However, startCompute in GPUBackend calls resultGrid.clearBoard()
+then copies into resultGrid.boardFront, after which CPU-fallback calls
+resultGrid.updateToNextGeneration(). The stale boardBack/ageBack values are
+overwritten correctly in the next gen, but if recount() or any external code
+reads boardBack directly, results can be wrong.
+
+Fix: Also call Arrays.fill(boardBack, (byte)0) and Arrays.fill(ageBack, 0)
+inside clearBoard().
+
+
+1.3  Public Mutable Array Fields  (Lines 18–19)  [MAINTAINABILITY / MEDIUM]
+---------------------------------------------------------------------------
+    public byte[] boardFront;
+    public byte[] boardBack;
+
+Both backing arrays are fully public, allowing any class to write cell data,
+swap arrays, or change array lengths without going through the validated API.
+GPUBackend uses System.arraycopy(inputGrid.boardFront, …) directly, bypassing
+getCellState entirely.
+
+Fix: Make them package-private or provide a copyFrom(Grid) method so external
+access is controlled.
+
+
+1.4  popHistIdx Unbounded Increment  (Line 154)  [LOW / LATENT OVERFLOW]
+------------------------------------------------------------------------
+popHistIdx is incremented every generation without ever resetting (except in
+clearBoard). At high speeds it will theoretically overflow int after an
+extremely long run. Low real-world risk but worth noting.
+
+
+--------------------------------------------------------------------------------
+2. SimulationController.java — Logic Bugs / UX
+--------------------------------------------------------------------------------
+
+2.1  "MAX" Speed Behaves Identically to "1x"  (Lines 76–86)  [HIGH]
+--------------------------------------------------------------------
+SPEED_LEVELS = { 1, 2, 5, 10, 0 }. For index 4 ("MAX"), stepsPerFrame = 0.
+
+    boolean shouldStep = (stepsPerFrame <= 1 && frameCount % 6 == 0) || stepsPerFrame > 1;
+
+Evaluation for stepsPerFrame = 0:
+    (0 <= 1 && frameCount%6==0) || 0>1  →  runs only every 6 frames, same as 1x.
+
+    count = Math.max(1, stepsPerFrame) = Math.max(1, 0) = 1 step per trigger.
+
+"MAX" is indistinguishable from "1x", defeating its purpose entirely.
+
+Fix: Add a special case for stepsPerFrame == 0 that runs every frame without
+rate limiting:
+    if (stepsPerFrame == 0) {
+        board.updateToNextGeneration();
+        stepsSinceLastCalc++;
+    } else if ((stepsPerFrame <= 1 && frameCount % 6 == 0) || stepsPerFrame > 1) {
+        ...
+    }
+
+
+2.2  GPS First-Frame Shows 0 Due to Uninitialised lastGPSCalc  (Lines 89–95)  [LOW / UI GLITCH]
+------------------------------------------------------------------------------------------------
+lastGPSCalc is 0L (Java default for long). The first time the 500 ms check fires,
+elapsed = (now - 0) / 1000.0 = current epoch time in seconds (~1.7e9), making
+gensPerSec ≈ 0. The display shows "GPS: 0" until the next 500 ms update.
+
+Fix: Initialise lastGPSCalc = System.currentTimeMillis() inside init().
+
+
+2.3  Zoom Is Centred on Canvas Centre, Not Mouse Cursor  (Lines 231–237)  [MEDIUM / UX]
+----------------------------------------------------------------------------------------
+    panX *= zoomLevel / oldZoom;
+    panY *= zoomLevel / oldZoom;
+
+This keeps the canvas centre fixed during zoom instead of the point under the
+mouse cursor. The ScrollEvent's getX()/getY() are ignored.
+
+Fix:
+    double mx = e.getX(), my = e.getY();
+    double ratio = zoomLevel / oldZoom;
+    panX = mx + (panX - mx) * ratio;
+    panY = my + (panY - my) * ratio;
+
+
+--------------------------------------------------------------------------------
+3. GPUBackend.java — Resource Leaks / Runtime Bugs
+--------------------------------------------------------------------------------
+
+3.1  GL Context Not Released on Exception in initGPU()  (Lines 177–181)  [HIGH]
+---------------------------------------------------------------------------------
+The outer catch(Exception e) block only sets useCPU = true. If an exception
+occurs after ctx.makeCurrent() (line 87) but before ctx.release() (line 172) —
+for example during texture creation, shader compilation, or buffer allocation —
+the context remains current and is never released. This is a native resource
+leak and can cause subsequent GL operations to fail.
+
+Fix: Use try-finally:
+    try {
+        ctx.makeCurrent();
+        // ... all GL init ...
+        ctx.release();
+    } catch (Exception e) {
+        try { ctx.release(); } catch (Exception ignored) {}
+        useCPU = true;
+    }
+
+
+3.2  GL Context Not Released on Exception in runGPUCompute()  (Lines 306–313)  [HIGH]
+---------------------------------------------------------------------------------------
+Same pattern: if any GL call between ctx.makeCurrent() (line 228) and
+ctx.release() (line 297) throws, the context leaks. The catch block does not
+call ctx.release().
+
+Fix: Wrap runGPUCompute in try-finally with context release in the finally block.
+
+
+3.3  processBatch() totalIterations Parameter Is Dead Code  (Line 320)  [LOW / MAINTAINABILITY]
+------------------------------------------------------------------------------------------------
+    public boolean processBatch(int totalIterations) {
+        ...
+        int remaining = targetIterations - computeProgress; // uses field, ignores parameter
+
+The method signature accepts totalIterations but the implementation uses the
+targetIterations field exclusively. The caller in GPULabController.update()
+passes dial.getValue() for no effect. This is misleading API design.
+
+Fix: Remove the parameter and use targetIterations exclusively.
+
+
+3.4  No GPU Resource Disposal Method  [LOW / RESOURCE LEAK]
+------------------------------------------------------------
+Textures (computeTex), FBO (computeFbo), and shader program (computeProgram)
+are allocated but never deleted. There is no dispose() method called on
+application shutdown.
+
+Fix: Add a dispose() method calling gl4.glDeleteTextures, glDeleteFramebuffers,
+and glDeleteProgram; call it from App.stop().
+
+
+3.5  CPU Fallback Runs Against Partially Mutated resultGrid  (Lines 306–313)  [MEDIUM]
+---------------------------------------------------------------------------------------
+When the GPU path fails mid-compute, computeProgress is reset to 0 and
+computing is set to true. processBatch() will then call
+resultGrid.updateToNextGeneration() starting from whatever partial state
+resultGrid was in when the GPU failed. Generation counter, born/died stats,
+and population of resultGrid will be inconsistent.
+
+Fix: In the catch block, re-copy the original input to resultGrid:
+    resultGrid.clearBoard();
+    System.arraycopy(originalInput.boardFront, 0, resultGrid.boardFront, 0, …);
+    resultGrid.recount();
+
+(This also requires saving the inputGrid reference on the object for the
+fallback path.)
+
+
+3.6  startCompute Does Not Save inputGrid for CPU Fallback Recovery  [MEDIUM]
+------------------------------------------------------------------------------
+The CPU fallback path (processBatch) relies on resultGrid being correctly
+initialised from inputGrid at the start of startCompute. If the GPU path
+partially corrupts resultGrid before failing, there is no saved copy of the
+original inputGrid state to reset from.
+
+Fix: Save a reference to (or a copy of) inputGrid at the start of startCompute
+so the catch block can restore the initial state.
+
+
+--------------------------------------------------------------------------------
+4. PatternLibrary.java — Logic Bug
+--------------------------------------------------------------------------------
+
+4.1  spawnRandomPattern Ignores Actual Board Dimensions  (Lines 38–43)  [MEDIUM]
+----------------------------------------------------------------------------------
+    int gs = GRID_SIZE;   // constant: 256
+    int count = (gs * gs) / 3;
+    for (int i = 0; i < count; i++) {
+        board.setCellState(rng.nextInt(gs), rng.nextInt(gs), true);
+    }
+
+Uses the GRID_SIZE constant regardless of the board's actual dimensions.
+If the board has different rows/cols, cells outside bounds are silently
+ignored by setCellState, producing incorrect density.
+
+Fix: Use board.getRows() and board.getCols() and compute count from those.
+
+
+--------------------------------------------------------------------------------
+5. App.java — Runtime Bugs
+--------------------------------------------------------------------------------
+
+5.1  NullPointerException if CSS Resource Missing  (Lines 63–65)  [HIGH]
+-------------------------------------------------------------------------
+    scene.getStylesheets().add(
+        getClass().getResource("/css/dark-theme.css").toExternalForm());
+
+getResource() returns null if the resource is absent (e.g. misconfigured
+build). Calling .toExternalForm() on null throws an NPE at startup with no
+user-facing message.
+
+Fix:
+    URL cssUrl = getClass().getResource("/css/dark-theme.css");
+    if (cssUrl != null) scene.getStylesheets().add(cssUrl.toExternalForm());
+    else System.err.println("[App] Warning: dark-theme.css not found");
+
+
+5.2  activeScreen Set Before Transition Completes  (Lines 127–138)  [MEDIUM / UI RACE]
+----------------------------------------------------------------------------------------
+    activeScreen = screen;         // updated immediately
+    ...
+    screenManager.transitionTo(target); // 500ms later the new screen appears
+
+During the 500 ms fade transition, the AnimationTimer starts calling the new
+screen's controller update() before it is visible. The old screen's controller
+stops receiving updates immediately, causing its animation to freeze mid-fade.
+
+Fix: Update activeScreen only when the transition completes, e.g. via a
+Runnable passed to ScreenManager.transitionTo() called from the
+fadeIn.setOnFinished handler.
+
+
+--------------------------------------------------------------------------------
+6. MenuController.java — Visual / UX
+--------------------------------------------------------------------------------
+
+6.1  Particle ptAlpha Range Inconsistent with Normalisation  (Lines 133, 124)  [LOW / VISUAL]
+-----------------------------------------------------------------------------------------------
+    ptAlpha[i] = rng.nextFloat() * 40 + 20;  // range [20, 60]
+    ...
+    double alpha = Math.max(0, Math.min(1, (ptAlpha[i] + pulse) / 255.0));
+
+ptAlpha is initialised to [20, 60], then divided by 255 for the actual alpha
+→ maximum initial alpha ≈ 0.235 (nearly invisible). The particles appear
+extremely faint. Likely intended to use a [0, 255] initialisation range.
+
+
+6.2  Hardcoded Initial Particle Bounds  (Lines 135–136)  [LOW]
+--------------------------------------------------------------
+    ptX[i] = rng.nextFloat() * 1280;
+    ptY[i] = rng.nextFloat() * 720;
+
+Hard-codes 1280×720. Particles initialised before the scene is shown may be
+positioned incorrectly at other window sizes.
+
+
+--------------------------------------------------------------------------------
+7. conway_compute.glsl — Semantic / Correctness
+--------------------------------------------------------------------------------
+
+7.1  GPU Uses Toroidal Topology; CPU Uses Flat (Dead) Borders  [HIGH / SEMANTIC MISMATCH]
+------------------------------------------------------------------------------------------
+GLSL (lines 69–70):
+    uint rA=(row-1u)&255u, rB=(row+1u)&255u;
+    uint cL=(col-1u)&7u,   cR=(col+1u)&7u;
+
+&255u and &7u implement modular (wrap-around) boundaries. Row 0's north
+neighbour is row 255, and vice versa.
+
+Java Grid.countLiveNeighbors() (lines 157–166):
+    for (int r = Math.max(0, row - 1); r <= Math.min(rows - 1, row + 1); ...)
+
+Clamps at the border — cells outside the grid are treated as dead (flat
+boundary).
+
+The GPU and CPU simulate DIFFERENT automata. A glider reaching a border
+passes through on GPU but dies on CPU. Results after many iterations will
+diverge completely.
+
+Fix: Either make the CPU use toroidal wrapping, or make the GPU use flat
+boundaries (add explicit boundary checks in GLSL instead of bitmask wrapping).
+Whichever is chosen, both sides must match.
+
+
+7.2  Hardcoded Grid Dimensions in Shader  (Lines 69–70)  [MEDIUM / MAINTAINABILITY]
+-------------------------------------------------------------------------------------
+&255u assumes 256 rows; &7u assumes 8 column-words × 32 bits = 256 columns.
+If GRID_SIZE is ever changed in Java the shader silently produces wrong output.
+There is no compile-time link between the Java constant and the shader.
+
+Fix: Pass grid size as a uniform, or inject a #define when loading the shader.
+
+
+7.3  Missing Explicit barrier() Comment After Remainder Step  [LOW / LATENT]
+------------------------------------------------------------------------------
+The barrier() inside the "if (iter < uIterations)" block (line 103) is correct
+only because the condition is uniform (all threads share iter and uIterations).
+This is a valid but non-obvious assumption. A comment explaining the reasoning
+would prevent future accidental breakage if the control flow is modified.
+
+
+7.4  conway.glsl Is Dead Code  [LOW / MAINTAINABILITY]
+-------------------------------------------------------
+conway.glsl is a legacy fragment shader using texture2D, varying, gl_FragColor
+(GLSL ES / old-style syntax). It is never referenced anywhere in the Java
+codebase. GPUBackend.loadShaderSource loads only "shaders/conway_compute.glsl".
+It is still copied into the build output by build.gradle (line 43,
+include '*.glsl') but serves no function.
+
+Fix: Remove conway.glsl from data/, or move it outside the build resource path.
+
+
+--------------------------------------------------------------------------------
+8. IterationDial.java — UX Bugs
+--------------------------------------------------------------------------------
+
+8.1  Dial Value Jumps When Crossing 12 O'Clock  (Lines 153–159)  [MEDIUM / UX]
+--------------------------------------------------------------------------------
+    double mapped = angle + Math.PI / 2;
+    if (mapped < 0) mapped += Math.PI * 2;
+    value = Math.max(0, Math.min(1, mapped / (Math.PI * 2)));
+
+atan2 returns (−π, π]. When dragging counterclockwise across 12 o'clock,
+mapped passes through 0 and is clamped there. Dragging clockwise past 12,
+value jumps from ~1.0 to 0.0. Dragging smoothly around the full circle is
+impossible — the value resets to 0 when crossing 12 o'clock.
+
+Fix: Track the previous angle and compute angular deltas to apply continuously,
+rather than mapping absolute angle to value.
+
+
+8.2  getValue() Can Return 0 Causing Silent No-Op Compute  (Line 164 + GPULabController:181)  [LOW]
+----------------------------------------------------------------------------------------------------
+If the dial is at position 0, getValue() returns 0. startCompute(board, 0)
+returns immediately (iterations <= 0 guard) with no feedback to the user.
+
+Fix: In compute(), guard: if (iterations <= 0) { showErrorBanner("Set iterations > 0"); return; }
+
+
+--------------------------------------------------------------------------------
+9. GPULabController.java — Design Issues
+--------------------------------------------------------------------------------
+
+9.1  Shared gameBoard Between Simulation and GPU Lab  [MEDIUM / DESIGN / COUPLING]
+------------------------------------------------------------------------------------
+Both SimulationController and GPULabController hold a reference to the same
+Grid object (App.gameBoard). This means:
+  - Running compute in the GPU Lab mutates the grid visible to the Simulation.
+  - After GPU compute, resultGrid (a separate grid in GPUBackend) holds the
+    result, but board (the shared game board) remains as the pre-compute input.
+    The user may expect the simulation to continue from the post-compute state.
+  - goMenu() in GPULabController calls board.clearBoard(), silently destroying
+    simulation state the user may have built up.
+
+Fix: The GPU Lab should work on its own private Grid copy, or the shared-state
+intent should be explicitly documented and communicated to the user via UI.
+
+
+9.2  drawResultGrid() Called Before Canvas Is Laid Out  (Lines 121–146)  [LOW / VISUAL]
+----------------------------------------------------------------------------------------
+    double w = resultPane.getWidth();
+    double h = resultPane.getHeight();
+    if (w <= 0 || h <= 0) return;
+
+The guard prevents a crash but silently skips the draw if called before layout
+completes. When compute() (FXML handler) calls drawResultGrid() on the first
+frame, the canvas may not yet be sized, resulting in a blank result pane until
+the next frame redraws it. Minor one-frame flicker.
+
+
+================================================================================
+SUMMARY TABLE
+================================================================================
+
+ #   | File                        | Line(s)   | Severity | Category
+-----|-----------------------------|-----------| ---------|-------------------
+ 1.1 | Grid.java                   | 67–73     | Medium   | Logic Bug
+ 1.2 | Grid.java                   | 169–179   | Low      | Latent State
+ 1.3 | Grid.java                   | 18–19     | Medium   | Maintainability
+ 1.4 | Grid.java                   | 154       | Low      | Latent Overflow
+ 2.1 | SimulationController.java   | 76–86     | HIGH     | Logic Bug
+ 2.2 | SimulationController.java   | 89–95     | Low      | UI Glitch
+ 2.3 | SimulationController.java   | 231–237   | Medium   | UX Bug
+ 3.1 | GPUBackend.java             | 177–181   | HIGH     | Resource Leak
+ 3.2 | GPUBackend.java             | 306–313   | HIGH     | Resource Leak
+ 3.3 | GPUBackend.java             | 320       | Low      | Dead Parameter
+ 3.4 | GPUBackend.java             | (global)  | Low      | Resource Leak
+ 3.5 | GPUBackend.java             | 306–313   | Medium   | Logic Bug
+ 3.6 | GPUBackend.java             | 203–222   | Medium   | Logic Bug
+ 4.1 | PatternLibrary.java         | 38–43     | Medium   | Logic Bug
+ 5.1 | App.java                    | 63–65     | HIGH     | NPE / Startup Crash
+ 5.2 | App.java                    | 127–138   | Medium   | UI Race
+ 6.1 | MenuController.java         | 124, 133  | Low      | Visual Bug
+ 6.2 | MenuController.java         | 135–136   | Low      | Hardcoded Value
+ 7.1 | conway_compute.glsl         | 69–70     | HIGH     | Semantic Mismatch
+ 7.2 | conway_compute.glsl         | 69–70     | Medium   | Maintainability
+ 7.3 | conway_compute.glsl         | 103       | Low      | Latent Race
+ 7.4 | conway.glsl                 | all       | Low      | Dead Code
+ 8.1 | IterationDial.java          | 153–159   | Medium   | UX Bug
+ 8.2 | IterationDial.java          | 164       | Low      | Silent No-Op
+ 9.1 | GPULabController.java       | 49        | Medium   | Design / Coupling
+ 9.2 | GPULabController.java       | 121–146   | Low      | Visual Glitch
+
+================================================================================
+END OF REVIEW
+================================================================================
