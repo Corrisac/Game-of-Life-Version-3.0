@@ -30,6 +30,31 @@ public class SimulationController {
     @FXML private VBox hudOverlay;
     @FXML private Button btnPause, btnBrush, btnRule, btnSpeed, btnHud, btnHeat;
 
+    // Pre-allocated color constants — avoids Color.web() allocations inside the 60fps render loop
+    private static final Color C_BG          = Color.web("#0A0F19");
+    private static final Color C_CELL_ALIVE  = Color.web("#00FFE0");
+    private static final Color C_CELL_DEAD   = Color.web("#121826");
+    private static final Color C_MM_ALIVE    = Color.web("#00FFE0", 0.7);
+    private static final Color C_MM_VP       = Color.web("#00FFE0", 0.8);
+    private static final Color C_SPARKLINE   = Color.web("#00FFE0", 0.6);
+
+    // Pre-computed heatmap age→color palette (covers age 0–99; clamped above 99)
+    private static final int   AGE_PALETTE_MAX = 100;
+    private final Color[] agePalette = buildAgePalette();
+
+    private static Color[] buildAgePalette() {
+        Color[] p = new Color[AGE_PALETTE_MAX];
+        for (int age = 0; age < AGE_PALETTE_MAX; age++) {
+            if (age <= 0)       p[age] = Color.web("#121826");
+            else if (age == 1)  p[age] = Color.web("#00FFFF");
+            else if (age <= 5)  p[age] = Color.web("#1E90FF").interpolate(Color.web("#00FFE0"), (age - 2) / 3.0);
+            else if (age <= 15) p[age] = Color.web("#00FFE0").interpolate(Color.web("#FF00AA"), (age - 5) / 10.0);
+            else if (age <= 40) p[age] = Color.web("#FF00AA").interpolate(Color.web("#FF4757"), (age - 15) / 25.0);
+            else                p[age] = Color.web("#FF4757").interpolate(Color.WHITE, Math.min((age - 40) / 30.0, 1.0));
+        }
+        return p;
+    }
+
     private App app;
     private Grid board;
     private boolean isPaused = true;
@@ -118,7 +143,7 @@ public class SimulationController {
 
     private void drawGrid(double w, double h) {
         GraphicsContext gc = gridCanvas.getGraphicsContext2D();
-        gc.setFill(Color.web("#0A0F19"));
+        gc.setFill(C_BG);
         gc.fillRect(0, 0, w, h);
 
         int gs = SimulationRules.GRID_SIZE;
@@ -136,9 +161,9 @@ public class SimulationController {
                 if (cx + cellSize < 0 || cx > w || cy + cellSize < 0 || cy > h) continue;
 
                 if (board.getCellState(r, c)) {
-                    gc.setFill(showHeatmap ? ageToColor(board.getAge(r, c)) : Color.web("#00FFE0"));
+                    gc.setFill(showHeatmap ? agePalette[Math.min(board.getAge(r, c), AGE_PALETTE_MAX - 1)] : C_CELL_ALIVE);
                 } else {
-                    gc.setFill(Color.web("#121826"));
+                    gc.setFill(C_CELL_DEAD);
                 }
                 gc.fillRect(cx, cy, cellSize, cellSize);
             }
@@ -155,7 +180,7 @@ public class SimulationController {
             for (int r = 0; r < gs; r++) {
                 for (int c = 0; c < gs; c++) {
                     if (board.getCellState(r, c)) {
-                        gc.setFill(Color.web("#00FFE0", 0.7));
+                        gc.setFill(C_MM_ALIVE);
                         gc.fillRect(mmX + c * mmCell, mmY + r * mmCell, mmCell, mmCell);
                     }
                 }
@@ -166,7 +191,7 @@ public class SimulationController {
             double vpH = mmSize * vpRatio;
             double vpOffX = -panX / gridW * mmSize;
             double vpOffY = -panY / gridH * mmSize;
-            gc.setStroke(Color.web("#00FFE0", 0.8));
+            gc.setStroke(C_MM_VP);
             gc.setLineWidth(1);
             gc.strokeRect(mmX + (mmSize - vpW) / 2 + vpOffX,
                           mmY + (mmSize - vpH) / 2 + vpOffY, vpW, vpH);
@@ -185,7 +210,7 @@ public class SimulationController {
         int maxPop = 1;
         for (int v : hist) if (v > maxPop) maxPop = v;
 
-        gc.setStroke(Color.web("#00FFE0", 0.6));
+        gc.setStroke(C_SPARKLINE);
         gc.setLineWidth(1);
         gc.beginPath();
         for (int i = 0; i < hist.length; i++) {
@@ -196,15 +221,6 @@ public class SimulationController {
             if (i == 0) gc.moveTo(x, y); else gc.lineTo(x, y);
         }
         gc.stroke();
-    }
-
-    private Color ageToColor(int age) {
-        if (age <= 0) return Color.web("#121826");
-        if (age == 1) return Color.web("#00FFFF");
-        if (age <= 5) return Color.web("#1E90FF").interpolate(Color.web("#00FFE0"), (age - 2) / 3.0);
-        if (age <= 15) return Color.web("#00FFE0").interpolate(Color.web("#FF00AA"), (age - 5) / 10.0);
-        if (age <= 40) return Color.web("#FF00AA").interpolate(Color.web("#FF4757"), (age - 15) / 25.0);
-        return Color.web("#FF4757").interpolate(Color.WHITE, Math.min((age - 40) / 30.0, 1.0));
     }
 
     // ── Mouse Event Handlers ──────────────────────────────────

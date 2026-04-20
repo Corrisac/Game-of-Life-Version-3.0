@@ -137,6 +137,43 @@
                            text="This application demonstrates how the Game of Life maps perfectly onto GPU hardware.&#10;&#10;Each pixel on the GPU processes one cell independently and simultaneously through a GLSL fragment shader. The 'conway.glsl' shader samples 8 texture neighbors, counts alive cells, and outputs the next state — all in parallel across thousands of GPU cores.&#10;&#10;The ping-pong buffer technique alternates between two framebuffers: one is read as a texture (current generation), the other is written to (next generation). After each iteration, they swap. This allows the GPU to compute 100,000+ generations in seconds, a task that would take minutes on the CPU.&#10;&#10;This is the same parallel computing paradigm used in machine learning, physics simulation, ray tracing, and scientific computing."/>
                 </VBox>
 
+                <!-- Section IX: Dual Species -->
+                <VBox styleClass="glass-card" spacing="10">
+                    <Label text="IX. DUAL SPECIES — LIFE VS ANTILIFE" styleClass="section-title"/>
+                    <Separator style="-fx-border-color: transparent transparent rgba(255,62,165,0.2) transparent;"/>
+                    <Label wrapText="true" styleClass="body-text"
+                           text="What happens when two completely independent cellular automata share the same grid? This project introduces a DUAL-SPECIES mode where Life (cyan) and Antilife (magenta-pink) coexist on a single 256×256 grid.&#10;&#10;Both species run standard Conway B3/S23 rules — but each species is invisible to the other's neighbour counts. A Life cell only counts Life neighbours; an Antilife cell only counts Antilife neighbours. They are, in every simulation-theoretic sense, parallel universes occupying the same substrate."/>
+
+                    <HBox spacing="10">
+                        <VBox spacing="6" HBox.hgrow="ALWAYS"
+                              style="-fx-background-color: rgba(0,255,224,0.05); -fx-border-color: rgba(0,255,224,0.2);
+                                     -fx-border-radius: 8; -fx-background-radius: 8; -fx-padding: 12;">
+                            <Label text="LIFE SPECIES" style="-fx-text-fill: #00FFE0; -fx-font-size: 12px; -fx-font-weight: bold;"/>
+                            <Label wrapText="true" styleClass="body-text"
+                                   text="Survives with 2 or 3 Life neighbours. Born into a dead cell with exactly 3 Life neighbours. Antilife cells are fully ignored."/>
+                        </VBox>
+                        <VBox spacing="6" HBox.hgrow="ALWAYS"
+                              style="-fx-background-color: rgba(255,62,165,0.05); -fx-border-color: rgba(255,62,165,0.2);
+                                     -fx-border-radius: 8; -fx-background-radius: 8; -fx-padding: 12;">
+                            <Label text="ANTILIFE SPECIES" style="-fx-text-fill: #FF3EA5; -fx-font-size: 12px; -fx-font-weight: bold;"/>
+                            <Label wrapText="true" styleClass="body-text"
+                                   text="Survives with 2 or 3 Antilife neighbours. Born into a dead cell with exactly 3 Antilife neighbours. Life cells are fully ignored."/>
+                        </VBox>
+                    </HBox>
+
+                    <VBox spacing="6"
+                          style="-fx-background-color: rgba(255,159,67,0.05); -fx-border-color: rgba(255,159,67,0.2);
+                                 -fx-border-radius: 8; -fx-background-radius: 8; -fx-padding: 12;">
+                        <Label text="⚡ THE COLLISION RULE — THE ONLY INTERACTION"
+                               style="-fx-text-fill: #FF9F43; -fx-font-size: 12px; -fx-font-weight: bold;"/>
+                        <Label wrapText="true" styleClass="body-text"
+                               text="If a single dead cell simultaneously qualifies for a Life birth (exactly 3 Life neighbours) AND an Antilife birth (exactly 3 Antilife neighbours) on the same tick, BOTH births are cancelled. The cell stays dead. This is the contested-birth rule — the entire cross-species interaction compressed into three bitwise operations.&#10;&#10;Invariant: no cell can ever be both Life and Antilife simultaneously. The condition lifeBits &amp; antiBits = 0 is maintained after every generation."/>
+                    </VBox>
+
+                    <Label wrapText="true" styleClass="body-text"
+                           text="WHAT THIS DEMONSTRATES&#10;&#10;• GLIDER DUEL: A Life glider heading directly at an Antilife glider. Since neither sees the other's neighbours, they pass through each other's territory largely undisturbed. The only possible disruption is a contested birth at their crossing point — a single contested cell is not enough to kill a glider.&#10;&#10;• CONTESTED FRONTIER: Place an R-pentomino of each species on opposite sides of the grid. Each expands chaotically for ~1100 generations. Where their growth fronts meet, contested births form a visible dead zone — a neutral no-man's-land where neither species can take root.&#10;&#10;• EMPIRES: Large random fills on each half. Both populations collapse into stable territories and their expansion fronts contest the central corridor indefinitely.&#10;&#10;The dual-species model is a minimal, rigorous example of how two systems sharing a substrate can produce complex boundary phenomena purely through resource competition — without any explicit 'conflict' in their rules. It is a microcosm of ecological competition, market dynamics, and immune system behaviour."/>
+                </VBox>
+
                 <!-- Section VIII: Beyond Conway -->
                 <VBox styleClass="glass-card" spacing="10">
                     <Label text="VIII. BEYOND CONWAY'S RULES" styleClass="section-title"/>

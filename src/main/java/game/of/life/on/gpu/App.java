@@ -1,8 +1,10 @@
 package game.of.life.on.gpu;
 
+import game.of.life.on.gpu.engine.DualGrid;
 import game.of.life.on.gpu.engine.Grid;
 import game.of.life.on.gpu.engine.SimulationRules;
 import game.of.life.on.gpu.gpu.GPUBackend;
+import game.of.life.on.gpu.ui.DualLabController;
 import game.of.life.on.gpu.ui.GPULabController;
 import game.of.life.on.gpu.ui.MenuController;
 import game.of.life.on.gpu.ui.ScreenManager;
@@ -24,17 +26,19 @@ public class App extends Application {
 
     // Shared state
     private Grid gameBoard;
+    private DualGrid dualBoard;
     private GPUBackend gpuBackend;
     private ScreenManager screenManager;
 
     // Screens & controllers
-    private Parent menuRoot, theoryRoot, simRoot, gpuLabRoot;
+    private Parent menuRoot, theoryRoot, simRoot, gpuLabRoot, dualLabRoot;
     private MenuController menuController;
     private TheoryController theoryController;
     private SimulationController simController;
     private GPULabController gpuLabController;
+    private DualLabController dualLabController;
 
-    // Currently active screen index (0=Menu, 1=Theory, 2=Sim, 3=Lab)
+    // Currently active screen index (0=Menu, 1=Theory, 2=Sim, 3=Lab, 4=DualLab)
     private int activeScreen = 0;
 
     // Frame timing
@@ -44,7 +48,8 @@ public class App extends Application {
     @Override
     public void start(Stage stage) throws Exception {
         // Initialize shared state
-        gameBoard = new Grid(SimulationRules.GRID_SIZE, SimulationRules.GRID_SIZE);
+        gameBoard  = new Grid(SimulationRules.GRID_SIZE, SimulationRules.GRID_SIZE);
+        dualBoard  = new DualGrid(SimulationRules.GRID_SIZE, SimulationRules.GRID_SIZE);
         gpuBackend = new GPUBackend();
         screenManager = new ScreenManager();
 
@@ -53,6 +58,7 @@ public class App extends Application {
         loadTheoryScreen();
         loadSimulationScreen();
         loadGPULabScreen();
+        loadDualLabScreen();
 
         // Show menu first
         screenManager.showImmediate(menuRoot);
@@ -85,6 +91,7 @@ public class App extends Application {
                     case 0 -> menuController.update(dt, fps);
                     case 2 -> simController.update(dt, fps);
                     case 3 -> gpuLabController.update(dt, fps);
+                    case 4 -> dualLabController.update(dt, fps);
                     // Theory screen (1) is static — no per-frame updates needed
                 }
             }
@@ -121,9 +128,16 @@ public class App extends Application {
         gpuLabController.init(this);
     }
 
+    private void loadDualLabScreen() throws Exception {
+        FXMLLoader loader = new FXMLLoader(getClass().getResource("/fxml/DualLabScreen.fxml"));
+        dualLabRoot = loader.load();
+        dualLabController = loader.getController();
+        dualLabController.init(this);
+    }
+
     // ── Navigation ────────────────────────────────────────
 
-    /** Navigate to screen by index: 0=Menu, 1=Theory, 2=Sim, 3=Lab */
+    /** Navigate to screen by index: 0=Menu, 1=Theory, 2=Sim, 3=Lab, 4=DualLab */
     public void navigateTo(int screen) {
         if (screenManager.isTransitioning()) return;
         activeScreen = screen;
@@ -132,6 +146,7 @@ public class App extends Application {
             case 1 -> theoryRoot;
             case 2 -> simRoot;
             case 3 -> gpuLabRoot;
+            case 4 -> dualLabRoot;
             default -> menuRoot;
         };
         screenManager.transitionTo(target);
@@ -139,7 +154,8 @@ public class App extends Application {
 
     // ── Shared State Accessors ────────────────────────────
 
-    public Grid getGameBoard() { return gameBoard; }
+    public Grid getGameBoard()     { return gameBoard; }
+    public DualGrid getDualBoard() { return dualBoard; }
     public GPUBackend getGPUBackend() { return gpuBackend; }
 
     public static void main(String[] args) {

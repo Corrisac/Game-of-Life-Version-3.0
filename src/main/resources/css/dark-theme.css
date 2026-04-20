@@ -122,6 +122,34 @@
     -fx-effect: dropshadow(gaussian, #2ED57380, 18, 0.3, 0, 0);
 }
 
+/* Antilife (Life vs Antilife — pink #FF3EA5) */
+.neon-button.antilife {
+    -fx-border-color: #FF3EA5;
+}
+.neon-button.antilife:hover {
+    -fx-background-color: rgba(255,62,165,0.08);
+    -fx-effect: dropshadow(gaussian, #FF3EA580, 18, 0.3, 0, 0);
+}
+.neon-button.antilife:pressed {
+    -fx-background-color: rgba(255,62,165,0.18);
+}
+
+/* Brush-active states — Dual Lab species selector */
+.neon-button.brush-active-life {
+    -fx-background-color: rgba(0,255,224,0.22);
+    -fx-border-color: #00FFE0;
+    -fx-effect: dropshadow(gaussian, #00FFE060, 10, 0.25, 0, 0);
+}
+.neon-button.brush-active-anti {
+    -fx-background-color: rgba(255,62,165,0.22);
+    -fx-border-color: #FF3EA5;
+    -fx-effect: dropshadow(gaussian, #FF3EA560, 10, 0.25, 0, 0);
+}
+.neon-button.brush-active-erase {
+    -fx-background-color: rgba(255,255,255,0.12);
+    -fx-border-color: rgba(255,255,255,0.6);
+}
+
 /* Small button variant for toolbars */
 .neon-button.small {
     -fx-font-size: 12px;

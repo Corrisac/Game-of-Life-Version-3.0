@@ -142,4 +142,5 @@ public class MenuController {
     @FXML private void goSimulation() { app.navigateTo(2); }
     @FXML private void goTheory()     { app.navigateTo(1); }
     @FXML private void goGPULab()     { app.navigateTo(3); }
+    @FXML private void goDualLab()    { app.navigateTo(4); }
 }

@@ -17,3 +17,6 @@ Thumbs.db
 
 # Old Processing build artifacts
 dist/
+
+# Stale IDE-generated class output (Gradle build/ is canonical)
+bin/
