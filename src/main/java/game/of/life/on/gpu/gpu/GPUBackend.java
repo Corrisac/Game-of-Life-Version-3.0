@@ -4,7 +4,6 @@ import game.of.life.on.gpu.engine.Grid;
 import game.of.life.on.gpu.engine.SimulationRules;
 
 import com.jogamp.opengl.*;
-import com.jogamp.opengl.util.GLBuffers;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
