@@ -125,8 +125,6 @@ public class GPULabController {
         resultCanvas.setWidth(w);
         resultCanvas.setHeight(h);
 
-        // For now, draw the board state after GPU compute
-        // (When GPUBackend is fully wired, this will use the GPU result buffer)
         GraphicsContext gc = resultCanvas.getGraphicsContext2D();
         gc.setFill(Color.web("#0A0F19"));
         gc.fillRect(0, 0, w, h);
