@@ -68,7 +68,7 @@ HUD overlay). References `DualLabController`.
 
 ## Existing Files — No Changes
 
-`Grid.java`, `GPUBackend.java`, `conway_compute.glsl`, `conway.glsl`,
+`Grid.java`, `GPUBackend.java`, `conway_compute.glsl`,
 `SimulationController.java`, `GPULabController.java`, `TheoryController.java`,
 `SimulationRules.java`, `PatternLibrary.java`, `IterationDial.java`,
 `ScreenManager.java`, `SimulationScreen.fxml`, `GPULabScreen.fxml`,

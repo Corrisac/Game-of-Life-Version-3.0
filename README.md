@@ -96,8 +96,7 @@ Scrollable deep-dive into cellular automata: origins, the four rules, Turing com
 ├── settings.gradle           # Project name
 ├── gradlew.bat               # Gradle wrapper (Windows)
 ├── data/
-│   ├── conway.glsl           # Fragment shader (live sim)
-│   └── conway_compute.glsl   # Compute shader (GPU Lab)
+│   └── conway_compute.glsl   # Compute shader (V6.1 bit-parallel)
 └── src/main/
     ├── java/game/of/life/on/gpu/
     │   ├── App.java           # JavaFX entry point
