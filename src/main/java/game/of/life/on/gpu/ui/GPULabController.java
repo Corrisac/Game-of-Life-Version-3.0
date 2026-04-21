@@ -41,7 +41,6 @@ public class GPULabController {
 
     // Compute state
     private boolean isComputing = false;
-    private boolean hasResult = false;
     private int brushSize = 1;
 
     public void init(App app) {
@@ -87,7 +86,6 @@ public class GPULabController {
             if (!gpuBackend.isComputing()) {
                 // Compute finished
                 isComputing = false;
-                hasResult = true;
                 progressBox.setVisible(false);
                 resultCanvas.setVisible(true);
                 resultBanner.setVisible(true);
@@ -147,7 +145,6 @@ public class GPULabController {
 
     private void onGridMousePressed(MouseEvent e) {
         drawOnGrid(e.getX(), e.getY());
-        hasResult = false;
     }
 
     private void onGridMouseDragged(MouseEvent e) {
@@ -191,7 +188,6 @@ public class GPULabController {
             // GPU path completes synchronously — check immediately
             if (!gpuBackend.isComputing()) {
                 // Already done (GPU was fast)
-                hasResult = true;
                 String mode = gpuBackend.isGPUAvailable() ? "GPU" : "CPU";
                 resultLabel.setText("✓  " + gpuBackend.getComputeTime() + "ms (" + mode + ")  ·  "
                     + String.format("%,d", iterations) + " GEN  ·  CONWAY");
@@ -225,7 +221,6 @@ public class GPULabController {
 
     @FXML private void clear() {
         board.clearBoard();
-        hasResult = false;
         resultCanvas.setVisible(false);
         resultBanner.setVisible(false);
         placeholderBox.setVisible(true);
@@ -234,12 +229,10 @@ public class GPULabController {
 
     @FXML private void spawnGlider() {
         PatternLibrary.spawnGlider(board, SimulationRules.GRID_SIZE / 2, SimulationRules.GRID_SIZE / 2);
-        hasResult = false;
     }
 
     @FXML private void spawnGun() {
         PatternLibrary.spawnGliderGun(board);
-        hasResult = false;
     }
 
     @FXML private void goMenu() {
